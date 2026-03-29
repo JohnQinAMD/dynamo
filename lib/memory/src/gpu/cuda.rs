@@ -50,7 +50,7 @@ impl super::GpuDevice for CudaBackend {
     }
 
     fn create_context(device_id: i32) -> GpuResult<ContextHandle> {
-        let dev = result::device::get(device_id as usize).map_err(cuda_err)?;
+        let dev = result::device::get(device_id).map_err(cuda_err)?;
         let mut ctx: sys::CUcontext = std::ptr::null_mut();
         check_cu(unsafe { sys::cuDevicePrimaryCtxRetain(&mut ctx, dev) })?;
         Ok(ContextHandle(ctx as *mut c_void))
@@ -190,7 +190,7 @@ impl super::GpuDevice for CudaBackend {
     }
 
     fn device_name(device_id: i32) -> GpuResult<String> {
-        let dev = result::device::get(device_id as usize).map_err(cuda_err)?;
+        let dev = result::device::get(device_id).map_err(cuda_err)?;
         let mut name_buf = [0i8; 256];
         check_cu(unsafe {
             sys::cuDeviceGetName(name_buf.as_mut_ptr(), name_buf.len() as i32, dev)
@@ -200,7 +200,7 @@ impl super::GpuDevice for CudaBackend {
     }
 
     fn total_memory(device_id: i32) -> GpuResult<usize> {
-        let dev = result::device::get(device_id as usize).map_err(cuda_err)?;
+        let dev = result::device::get(device_id).map_err(cuda_err)?;
         let mut bytes: usize = 0;
         check_cu(unsafe { sys::cuDeviceTotalMem_v2(&mut bytes, dev) })?;
         Ok(bytes)

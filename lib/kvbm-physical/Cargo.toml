@@ -33,7 +33,7 @@ uuid = { workspace = true }
 validator = { workspace = true }
 
 [features]
-default = []
+default = ["cuda"]
 collectives = []
 testing = []
 testing-kvbm = []

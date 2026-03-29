@@ -98,10 +98,43 @@ Container: tasimage/primus:pr-591-ainic
 - CU_MEM_HANDLE_TYPE_FABRIC: hipify warning only, not a build blocker
 - UCX connection: needs `UCX_NET_DEVICES` config for Pensando ionic
 
+## Dynamo Native Extension (maturin)
+
+| Test | Result |
+|------|--------|
+| maturin develop in SGLang MoRI container | **PASS** |
+| dynamo._core version 1.0.0 | **PASS** |
+| Build time: 1m 46s | Compiled in rocm/sgl-dev container |
+| Container: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2 | Rust 1.93.1 + maturin 1.12.4 |
+
+Key fix: `default = ["cuda"]` in dynamo-memory and kvbm-physical Cargo.toml to keep cudarc as default dependency.
+
+## SGLang MoRI Disaggregated Serving
+
+| Test | Result | Notes |
+|------|--------|-------|
+| SGLang MoRI image pull | PASS | rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2 |
+| SGLang MoRI container startup | PASS | Python, SGLang, MoRI all available |
+| MoRI RDMA device detection | **BLOCKED** | Ionic driver ABI mismatch |
+
+### Root Cause: Ionic RDMA Driver ABI Mismatch
+
+```
+libibverbs: Warning: Driver ionic does not support the kernel ABI of 1
+  (supports 4 to 4) for device /sys/class/infiniband/ionic_0
+```
+
+The container's libibverbs expects ionic driver ABI version 4, but the host's
+ionic kernel driver exposes ABI version 1. This prevents MoRI (and UCX) from
+accessing RDMA devices inside containers.
+
+**Fix**: Update the host AINIC driver to match the container's expected version.
+Refer to [AMD AINIC installation guide](https://instinct.docs.amd.com/projects/system-acceptance/en/latest/network/nic-installation.html).
+
 ## Remaining Work
 
-1. Configure UCX_NET_DEVICES for nixlbench inter-node VRAM transfer
-2. Build Dynamo native extension (`maturin develop`) in ROCm container
-3. End-to-end vLLM serving with Dynamo frontend on MI355X
-4. Full disaggregated serving: prefill on chi2899, decode on chi2900
+1. Update AINIC driver on chi2899/chi2900 to fix ionic ABI mismatch
+2. Re-run SGLang MoRI 1P1D disagg with matching drivers
+3. Test RIXL nixlbench inter-node with matching drivers
+4. End-to-end Dynamo + vLLM frontend integration
 
