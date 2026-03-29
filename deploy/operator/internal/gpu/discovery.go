@@ -818,3 +818,292 @@ func isAWSInstanceType(instanceType string) bool {
 	}
 	return false
 }
+
+// AMD GPU discovery constants
+const (
+	AMDGPUResourceName = "amd.com/gpu"
+
+	// AMD Device Metrics Exporter labels
+	AMDMetricsExporterDefaultLabels = "amd-device-metrics-exporter"
+
+	// AMD node label keys (set by AMD K8s device plugin)
+	AMDGPUCountKey   = "amd.com/gpu.count"
+	AMDGPUProductKey = "amd.com/gpu.product"
+	AMDGPUMemoryKey  = "amd.com/gpu.memory"
+
+	defaultAMDMetricsEndpointTemplate = "http://{POD_IP}:5000/metrics"
+)
+
+// DiscoverAMDGPUs extracts AMD GPU information from Kubernetes node labels.
+// This is the AMD equivalent of DiscoverGPUs for NVIDIA GPUs.
+//
+// It queries all cluster nodes for AMD GPU device plugin labels
+// (amd.com/gpu.count, amd.com/gpu.product, amd.com/gpu.memory)
+// and returns the best GPU configuration found, preferring nodes with
+// higher GPU count, then higher VRAM if counts are equal.
+//
+// This function requires cluster-wide node read permissions and expects nodes
+// to have AMD device plugin labels. If no nodes with AMD GPU labels are found,
+// it returns an error.
+func DiscoverAMDGPUs(ctx context.Context, k8sClient client.Reader) (*GPUInfo, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Starting AMD GPU discovery from cluster nodes")
+
+	nodeList := &corev1.NodeList{}
+	if err := k8sClient.List(ctx, nodeList); err != nil {
+		return nil, fmt.Errorf("failed to list cluster nodes: %w", err)
+	}
+
+	if len(nodeList.Items) == 0 {
+		return nil, fmt.Errorf("no nodes found in cluster")
+	}
+
+	logger.Info("Found cluster nodes for AMD GPU discovery", "count", len(nodeList.Items))
+
+	var bestGPUInfo *GPUInfo
+	nodesWithGPUs := 0
+
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		gpuInfo, err := extractAMDGPUInfoFromNode(node)
+		if err != nil {
+			logger.V(1).Info("Skipping node without valid AMD GPU info",
+				"node", node.Name,
+				"reason", err.Error())
+			continue
+		}
+
+		nodesWithGPUs++
+		logger.Info("Found AMD GPU node",
+			"node", node.Name,
+			"gpus", gpuInfo.GPUsPerNode,
+			"model", gpuInfo.Model,
+			"vram", gpuInfo.VRAMPerGPU)
+
+		if bestGPUInfo == nil ||
+			gpuInfo.GPUsPerNode > bestGPUInfo.GPUsPerNode ||
+			(gpuInfo.GPUsPerNode == bestGPUInfo.GPUsPerNode && gpuInfo.VRAMPerGPU > bestGPUInfo.VRAMPerGPU) {
+			bestGPUInfo = gpuInfo
+		}
+	}
+
+	if bestGPUInfo == nil {
+		return nil, fmt.Errorf("no nodes with AMD GPU labels found (checked %d nodes). "+
+			"Ensure GPU nodes have labels: %s, %s, %s",
+			len(nodeList.Items), AMDGPUCountKey, AMDGPUProductKey, AMDGPUMemoryKey)
+	}
+
+	bestGPUInfo.NodesWithGPUs = nodesWithGPUs
+
+	cloudProvider, err := GetCloudProviderInfo(ctx, k8sClient)
+	if err != nil {
+		cloudProvider = CloudProviderUnknown
+	}
+	bestGPUInfo.CloudProvider = cloudProvider
+
+	logger.Info("AMD GPU discovery completed",
+		"gpusPerNode", bestGPUInfo.GPUsPerNode,
+		"nodesWithGPUs", bestGPUInfo.NodesWithGPUs,
+		"totalGpus", bestGPUInfo.GPUsPerNode*bestGPUInfo.NodesWithGPUs,
+		"model", bestGPUInfo.Model,
+		"vram", bestGPUInfo.VRAMPerGPU)
+
+	return bestGPUInfo, nil
+}
+
+// extractAMDGPUInfoFromNode reads AMD-specific labels from a node.
+// Returns error if required AMD GPU labels are missing or invalid.
+func extractAMDGPUInfoFromNode(node *corev1.Node) (*GPUInfo, error) {
+	labels := node.Labels
+	if labels == nil {
+		return nil, fmt.Errorf("node has no labels")
+	}
+
+	gpuCountStr, ok := labels[AMDGPUCountKey]
+	if !ok {
+		return nil, fmt.Errorf("missing label %s", AMDGPUCountKey)
+	}
+	gpuCount, err := strconv.Atoi(gpuCountStr)
+	if err != nil || gpuCount <= 0 {
+		return nil, fmt.Errorf("invalid AMD GPU count: %s", gpuCountStr)
+	}
+
+	gpuModel, ok := labels[AMDGPUProductKey]
+	if !ok || gpuModel == "" {
+		return nil, fmt.Errorf("missing or empty label %s", AMDGPUProductKey)
+	}
+
+	gpuMemoryStr, ok := labels[AMDGPUMemoryKey]
+	if !ok {
+		return nil, fmt.Errorf("missing label %s", AMDGPUMemoryKey)
+	}
+	gpuMemory, err := strconv.Atoi(gpuMemoryStr)
+	if err != nil || gpuMemory <= 0 {
+		return nil, fmt.Errorf("invalid AMD GPU memory: %s", gpuMemoryStr)
+	}
+
+	return &GPUInfo{
+		NodeName:    node.Name,
+		GPUsPerNode: gpuCount,
+		Model:       gpuModel,
+		VRAMPerGPU:  gpuMemory,
+	}, nil
+}
+
+// DiscoverAMDGPUsFromMetricsExporter reads GPU info from AMD Device Metrics Exporter.
+// This is the AMD equivalent of DiscoverGPUsFromDCGM.
+//
+// The function performs the following:
+//
+//  1. Lists AMD Device Metrics Exporter pods using known label selectors.
+//  2. Scrapes each running pod's metrics endpoint (http://<podIP>:5000/metrics).
+//  3. Parses Prometheus-format metrics for GPU information.
+//  4. Selects the "best" GPU node based on highest GPU count, then VRAM.
+//
+// Behavior Notes:
+//
+//   - Scrapes pods directly instead of using a Service ClusterIP to avoid
+//     load-balancing ambiguity in multi-node clusters.
+//   - If at least one pod is successfully scraped, partial failures are tolerated.
+//   - If all pods fail to scrape, an aggregated error is returned.
+//   - Assumes AMD Device Metrics Exporter runs as a DaemonSet (one pod per GPU node).
+//
+// Returns:
+//   - *GPUInfo for the selected node
+//   - error if no GPU data can be retrieved
+func DiscoverAMDGPUsFromMetricsExporter(ctx context.Context, k8sClient client.Reader) (*GPUInfo, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Starting AMD GPU discovery from Device Metrics Exporter")
+
+	amdPods, err := listAMDMetricsExporterPods(ctx, k8sClient)
+	if err != nil {
+		return nil, fmt.Errorf("listing AMD Device Metrics Exporter pods failed: %w", err)
+	}
+
+	if len(amdPods) == 0 {
+		return nil, fmt.Errorf("no AMD Device Metrics Exporter pods found")
+	}
+
+	var bestNode *GPUInfo
+	var scrapeErrors []error
+	nodesWithGPUs := 0
+
+	for _, pod := range amdPods {
+		if pod.Status.Phase != corev1.PodRunning || pod.Status.PodIP == "" {
+			continue
+		}
+
+		endpoint := buildAMDMetricsEndpoint(pod.Status.PodIP)
+		info, err := ScrapeMetricsEndpoint(ctx, endpoint)
+		if err != nil {
+			scrapeErrors = append(scrapeErrors, fmt.Errorf("pod %s (%s): %w", pod.Name, pod.Status.PodIP, err))
+			continue
+		}
+
+		nodesWithGPUs++
+
+		if bestNode == nil ||
+			info.GPUsPerNode > bestNode.GPUsPerNode ||
+			(info.GPUsPerNode == bestNode.GPUsPerNode &&
+				info.VRAMPerGPU > bestNode.VRAMPerGPU) {
+			bestNode = info
+		}
+	}
+
+	if bestNode == nil {
+		if len(scrapeErrors) > 0 {
+			return nil, fmt.Errorf("failed to scrape any AMD Device Metrics Exporter pod: %v", scrapeErrors)
+		}
+		return nil, fmt.Errorf("no GPU metrics could be parsed from any AMD Device Metrics Exporter pod")
+	}
+
+	cloudProvider, err := GetCloudProviderInfo(ctx, k8sClient)
+	if err != nil {
+		cloudProvider = CloudProviderUnknown
+	}
+	bestNode.CloudProvider = cloudProvider
+	bestNode.NodesWithGPUs = nodesWithGPUs
+
+	return bestNode, nil
+}
+
+// listAMDMetricsExporterPods finds AMD Device Metrics Exporter pods across all namespaces.
+func listAMDMetricsExporterPods(ctx context.Context, k8sClient client.Reader) ([]corev1.Pod, error) {
+	var result []corev1.Pod
+	seen := make(map[string]struct{})
+
+	selectors := []client.MatchingLabels{
+		{LabelApp: AMDMetricsExporterDefaultLabels},
+		{LabelAppKubernetesName: AMDMetricsExporterDefaultLabels},
+	}
+
+	var lastErr error
+
+	for _, selector := range selectors {
+		podList := &corev1.PodList{}
+
+		err := k8sClient.List(ctx, podList, selector)
+		if err != nil {
+			lastErr = fmt.Errorf("list AMD metrics exporter pods: %w", err)
+			continue
+		}
+
+		for _, pod := range podList.Items {
+			key := pod.Namespace + "/" + pod.Name
+
+			if _, exists := seen[key]; !exists {
+				seen[key] = struct{}{}
+				result = append(result, pod)
+			}
+		}
+	}
+
+	if len(result) > 0 {
+		return result, nil
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+
+	return nil, fmt.Errorf("no AMD Device Metrics Exporter pods found")
+}
+
+// buildAMDMetricsEndpoint constructs the metrics URL for an AMD Device Metrics Exporter pod.
+func buildAMDMetricsEndpoint(podIP string) string {
+	template := os.Getenv("AMD_METRICS_ENDPOINT_TEMPLATE")
+	if template == "" {
+		template = defaultAMDMetricsEndpointTemplate
+	}
+
+	return strings.ReplaceAll(template, "{POD_IP}", podIP)
+}
+
+// InferAMDHardwareSystem maps AMD GPU product names to GPU SKU types.
+// Returns a string identifier for the AMD GPU model, or "unknown-amd"
+// if the product name cannot be matched.
+//
+// This is the AMD equivalent of InferHardwareSystem for NVIDIA GPUs.
+// The returned string is not a GPUSKUType because AMD SKU identifiers
+// are not part of the NVIDIA-defined enum.
+func InferAMDHardwareSystem(gpuProduct string) string {
+	if gpuProduct == "" {
+		return "unknown-amd"
+	}
+
+	normalized := strings.ToUpper(strings.ReplaceAll(gpuProduct, "-", ""))
+	normalized = strings.ReplaceAll(normalized, " ", "")
+
+	switch {
+	case strings.Contains(normalized, "MI355X"):
+		return "mi355x"
+	case strings.Contains(normalized, "MI350X"):
+		return "mi350x"
+	case strings.Contains(normalized, "MI325X"):
+		return "mi325x"
+	case strings.Contains(normalized, "MI300X"):
+		return "mi300x"
+	default:
+		return "unknown-amd"
+	}
+}

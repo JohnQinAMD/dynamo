@@ -3,6 +3,7 @@ package cuda
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -19,6 +21,10 @@ import (
 const (
 	nvidiaGPUResource  = "nvidia.com/gpu"
 	nvidiaGPUDRADriver = "gpu.nvidia.com"
+)
+
+const (
+	amdGPUResource = "amd.com/gpu"
 )
 
 var podResourcesSocketPath = "/var/lib/kubelet/pod-resources/kubelet.sock"
@@ -208,4 +214,62 @@ func RestoreAndUnlockProcessTree(ctx context.Context, cudaPIDs []int, deviceMap 
 		}
 	}
 	return nil
+}
+
+// amdSmiGPUEntry represents a single GPU entry from amd-smi JSON output.
+type amdSmiGPUEntry struct {
+	GPU      int    `json:"gpu"`
+	UniqueID string `json:"unique_id"`
+	BDF      string `json:"bdf"`
+}
+
+// GetGPUUUIDsViaAmdSmi discovers GPU UUIDs using amd-smi.
+// This is the AMD equivalent of GetGPUUUIDsViaNvidiaSmi.
+//
+// It runs "amd-smi list --json" inside the target container's mount namespace
+// via nsenter, parses the JSON output, and returns a list of GPU unique IDs.
+//
+// The containerPID is the PID of a process in the target container, used to
+// enter the container's mount namespace. The function expects amd-smi to be
+// available inside the container.
+func GetGPUUUIDsViaAmdSmi(containerPID uint64, logger *zap.Logger) ([]string, error) {
+	cmd := exec.Command(
+		"nsenter",
+		"-t", strconv.FormatUint(containerPID, 10),
+		"-m", "--",
+		"amd-smi", "list", "--json",
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("amd-smi via nsenter (pid %d) failed: %w", containerPID, err)
+	}
+
+	var gpuEntries []amdSmiGPUEntry
+	if err := json.Unmarshal(output, &gpuEntries); err != nil {
+		return nil, fmt.Errorf("failed to parse amd-smi JSON output: %w", err)
+	}
+
+	var uuids []string
+	for _, entry := range gpuEntries {
+		id := entry.UniqueID
+		if id == "" {
+			id = entry.BDF
+		}
+		if id == "" {
+			logger.Warn("amd-smi: GPU entry has no unique_id or bdf", zap.Int("gpu", entry.GPU))
+			continue
+		}
+		uuids = append(uuids, id)
+	}
+
+	if len(uuids) == 0 {
+		return nil, fmt.Errorf("amd-smi returned no GPU identifiers (pid %d)", containerPID)
+	}
+
+	logger.Info("discovered AMD GPU UUIDs via amd-smi",
+		zap.Uint64("pid", containerPID),
+		zap.Int("count", len(uuids)),
+		zap.Strings("uuids", uuids))
+
+	return uuids, nil
 }
