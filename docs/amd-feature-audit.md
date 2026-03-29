@@ -141,7 +141,9 @@ Dynamo maturin build              FULLY TESTED ✓       03-29
   rocm/vllm + rocm/sgl-dev       BOTH WORK
 KV-Cache-Aware Routing            NOT TESTED (needs 2+ workers)
 KVBM end-to-end offload           NOT TESTED (needs full stack)
-Disaggregated Serving via RIXL    NOT TESTED (needs RIXL integration)
+RIXL UCX 2-node VRAM transfer     FULLY TESTED ✓       03-29
+  39.4 GB/s peak (79% of 400G)   MEASURED
+Disaggregated Serving via RIXL    NOT TESTED (needs Dynamo integration)
 Dynamic Planner                   NOT TESTED
 GPU Memory Service (VMM)          CODE WRITTEN ONLY
 Rust --features rocm build        NOT TESTED
