@@ -125,21 +125,26 @@
 ## Test Coverage Summary
 
 ```
-Dynamo Feature                    Test Level
-─────────────────────────────────────────────
-KV-Cache-Aware Routing            NOT TESTED
-KVBM (2.2-12x TTFT improvement)  KERNEL COMPILED ONLY
-Disaggregated Serving             INFRA VERIFIED (servers up)
+Dynamo Feature                    Test Level           Date
+──────────────────────────────────────────────────────────────
+vLLM + Dynamo aggregated serving  FULLY TESTED ✓       03-29
+KVBM HIP kernel GPU execution    FULLY TESTED ✓       03-29
+  vectorized_copy 4MB verified    DATA CORRECT ✓
+  Bandwidth: 8.3 GB/s            MEASURED
+RCCL multi-GPU 8x MI355X         FULLY TESTED ✓       03-29
+  406 GB/s busbw with ANP        MEASURED
+vLLM ROCm standalone             FULLY TESTED ✓       03-29
+  27.4 req/s, 36ms avg           MEASURED
+SGLang MoRI disagg servers        SERVERS UP ✓         03-29
+  ionic ABI fixed in container   RESOLVED
+Dynamo maturin build              FULLY TESTED ✓       03-29
+  rocm/vllm + rocm/sgl-dev       BOTH WORK
+KV-Cache-Aware Routing            NOT TESTED (needs 2+ workers)
+KVBM end-to-end offload           NOT TESTED (needs full stack)
+Disaggregated Serving via RIXL    NOT TESTED (needs RIXL integration)
 Dynamic Planner                   NOT TESTED
 GPU Memory Service (VMM)          CODE WRITTEN ONLY
-vLLM ROCm standalone              FULLY TESTED ✓
-vLLM + Dynamo integration         NOT TESTED
-SGLang MoRI disagg                SERVERS UP (no e2e)
-Frontend HTTP API                 NOT TESTED
-Rust GPU HAL + HIP backend        CODE WRITTEN ONLY
-Container/Deploy                  FILES CREATED
-RCCL multi-GPU                    FULLY TESTED ✓ (406 GB/s)
-Dynamo maturin build              FULLY TESTED ✓
+Rust --features rocm build        NOT TESTED
 ```
 
 ## Critical Gap Analysis
