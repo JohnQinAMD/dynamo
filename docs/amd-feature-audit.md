@@ -145,10 +145,14 @@ KV-Cache-Aware Routing            NOT TESTED (needs Dynamo router)
 KVBM end-to-end offload           NOT TESTED (needs full stack)
 RIXL UCX 2-node VRAM transfer     FULLY TESTED ✓       03-29
   39.4 GB/s peak (79% of 400G)   MEASURED
-Disaggregated Serving via RIXL    NOT TESTED (needs Dynamo integration)
-Dynamic Planner                   NOT TESTED
+RadixTree (KV router core)        FULLY TESTED ✓       03-29
+DistributedRuntime class          FULLY TESTED ✓       03-29
+cargo check kvbm-kernels (HIP)    FULLY TESTED ✓       03-29
+cargo check dynamo-memory         FULLY TESTED ✓       03-29
+etcd + nats infrastructure        FULLY TESTED ✓       03-29
+Disaggregated Serving via RIXL    NOT TESTED (needs Dynamo router process)
+Dynamic Planner                   NOT TESTED (needs K8s)
 GPU Memory Service (VMM)          CODE WRITTEN ONLY
-Rust --features rocm build        NOT TESTED
 ```
 
 ## Critical Gap Analysis
