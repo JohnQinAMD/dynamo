@@ -13,6 +13,8 @@
 
 pub mod actions;
 pub mod arena;
+/// GPU Hardware Abstraction Layer for CUDA and HIP backends.
+pub mod gpu;
 pub mod nixl;
 #[cfg(target_os = "linux")]
 pub mod numa;

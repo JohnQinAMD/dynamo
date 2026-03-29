@@ -67,9 +67,15 @@ COPY --chmod=775 --chown=dynamo:0 --from=wheel_builder /opt/dynamo/dist/nixl/ /o
 COPY --chmod=775 --chown=dynamo:0 --from=wheel_builder /workspace/nixl/build/src/bindings/python/nixl-meta/nixl-*.whl /opt/dynamo/wheelhouse/nixl/
 
 # NIXL environment and native libraries
+{% if device == "rocm" %}
+ENV NIXL_PREFIX=/opt/amd/amd_rixl
+ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib/x86_64-linux-gnu
+ENV NIXL_PLUGIN_DIR=$NIXL_LIB_DIR/plugins
+{% else %}
 ENV NIXL_PREFIX=/opt/nvidia/nvda_nixl
 ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib64
 ENV NIXL_PLUGIN_DIR=$NIXL_LIB_DIR/plugins
+{% endif %}
 
 # Copy UCX and NIXL native libraries to system directories
 COPY --from=wheel_builder /usr/local/ucx /usr/local/ucx
@@ -144,6 +150,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     chmod -R g+w /workspace/benchmarks
 {% endif %}
 
+{% if device != "rocm" %}
 # Force-reinstall NVIDIA packages in a separate layer so requirements changes don't trigger re-download
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     export PIP_CACHE_DIR=/root/.cache/pip && \
@@ -163,6 +170,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
             nvidia-cutlass-dsl==4.3.1 \
             nvidia-cudnn-cu13==9.16.0.29; \
     fi
+{% endif %}
 
 # Switch back to dynamo user after package installations
 USER dynamo
@@ -196,5 +204,9 @@ USER dynamo
 ARG DYNAMO_COMMIT_SHA
 ENV DYNAMO_COMMIT_SHA=${DYNAMO_COMMIT_SHA}
 
+{% if device == "rocm" %}
+ENTRYPOINT ["/bin/bash"]
+{% else %}
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+{% endif %}
 CMD []

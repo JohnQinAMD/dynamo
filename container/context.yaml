@@ -53,6 +53,12 @@ vllm:
     base_image_tag: 2025.3.2-0-devel-ubuntu24.04
     runtime_image_tag: 2025.3.2-0-devel-ubuntu24.04
     vllm_ref: v0.17.1
+  rocm:
+    base_image: rocm/pytorch
+    runtime_image: rocm/pytorch
+    base_image_tag: latest
+    runtime_image_tag: latest
+    vllm_ref: v0.18.0
   cpu:
     base_image: ubuntu
     runtime_image: ubuntu
@@ -80,6 +86,11 @@ sglang:
     runtime_image: lmsysorg/sglang
     base_image_tag: 25.11-cuda13.0-devel-ubuntu24.04
     runtime_image_tag: v0.5.9-cu130-runtime
+  rocm:
+    base_image: rocm/pytorch
+    runtime_image: rocm/pytorch
+    base_image_tag: latest
+    runtime_image_tag: latest
   enable_media_ffmpeg: "false"
   enable_gpu_memory_service: "true"
   enable_kvbm: "false"

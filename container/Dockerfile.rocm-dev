@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dynamo ROCm Development Container
+#
+# Build:
+#   docker build -f container/Dockerfile.rocm-dev -t dynamo-rocm-dev .
+#
+# Run:
+#   docker run --rm -it --device=/dev/kfd --device=/dev/dri \
+#     --security-opt seccomp=unconfined --group-add video \
+#     -v /mnt/vast/john/rocm-dynamo:/workspace \
+#     dynamo-rocm-dev
+
+FROM rocm/pytorch:latest
+
+ARG ROCM_PATH=/opt/rocm
+ARG PYTHON_VERSION=3.12
+
+# Build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake pkg-config \
+    libaio-dev liburing-dev libcxxopts-dev \
+    autoconf automake libtool \
+    rdma-core libibverbs-dev librdmacm-dev \
+    python3-pip ninja-build \
+    git curl wget jq \
+    etcd-server etcd-client \
+    protobuf-compiler \
+    libclang-dev patchelf \
+    libhwloc-dev libudev-dev \
+    vim less tree \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain 1.93.1 && \
+    chmod -R a+w $RUSTUP_HOME $CARGO_HOME
+
+# Install Python build tools
+RUN pip3 install --no-cache-dir meson pybind11 maturin uv hatchling
+
+# Install NATS server
+ARG NATS_VERSION=v2.11.3
+RUN wget -q https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-amd64.deb && \
+    dpkg -i nats-server-${NATS_VERSION}-amd64.deb && rm nats-server-${NATS_VERSION}-amd64.deb
+
+# Install etcd
+ARG ETCD_VERSION=v3.5.17
+RUN wget -q https://github.com/etcd-io/etcd/releases/download/$ETCD_VERSION/etcd-$ETCD_VERSION-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
+    mkdir -p /usr/local/bin/etcd && \
+    tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1 && \
+    rm /tmp/etcd.tar.gz
+ENV PATH=/usr/local/bin/etcd/:$PATH
+
+# Build UCX with ROCm support (required by RIXL for GPU-direct RDMA)
+RUN cd /tmp && \
+    git clone https://github.com/ROCm/ucx -b v1.19.x --depth 1 && \
+    cd ucx && ./autogen.sh && mkdir build && cd build && \
+    ../configure --enable-shared --disable-static --disable-doxygen-doc \
+      --enable-optimizations --enable-devel-headers \
+      --with-rocm=${ROCM_PATH} --with-verbs --with-dm --enable-mt \
+      --prefix=/usr/local/ucx && \
+    make -j$(nproc) && make install && \
+    rm -rf /tmp/ucx
+
+ENV PATH=/usr/local/ucx/bin:$PATH
+ENV LD_LIBRARY_PATH=/usr/local/ucx/lib:/usr/local/ucx/lib/ucx:${LD_LIBRARY_PATH}
+
+# RIXL/NIXL prefix — RIXL source is mounted at /workspace/RIXL and installed here.
+# The build.rs in nixl-sys reads NIXL_PREFIX to find headers and libraries.
+ENV NIXL_PREFIX=/opt/rocm/rixl
+ENV RIXL_PREFIX=/opt/rocm/rixl
+
+# ROCm environment
+ENV ROCM_PATH=${ROCM_PATH}
+ENV HIP_PATH=${ROCM_PATH}/hip
+ENV PATH=${ROCM_PATH}/bin:${HIP_PATH}/bin:$PATH
+ENV LD_LIBRARY_PATH=${ROCM_PATH}/lib:${LD_LIBRARY_PATH}
+
+# HIP environment for Dynamo
+ENV HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+ENV VLLM_ROCM_USE_AITER=1
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

@@ -25,6 +25,7 @@ static-kernels = []
 # Enable CUDA tests - only works when real CUDA kernels are built (not stubs)
 # Tests are gated with #[cfg(all(test, feature = "testing-cuda", not(stub_kernels)))]
 testing-cuda = []
+testing-rocm = []
 
 # Enable operational_copy, universal_from_block, block_from_universal kernels.
 # These kernels perform data layout permutation and are only needed for

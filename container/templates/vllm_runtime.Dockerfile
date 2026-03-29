@@ -60,6 +60,10 @@ ENV CPATH=/usr/local/cuda/include \
     TRITON_NVDISASM_PATH=/usr/local/cuda/bin/nvdisasm \
     TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
     TRITON_CUDART_PATH=/usr/local/cuda/include
+{% elif device == "rocm" %}
+ENV ROCM_PATH=/opt/rocm
+ENV HIP_PATH=/opt/rocm/hip
+ENV CPATH=/opt/rocm/include
 {% endif %}
 
 ### COPY NATS & ETCD ###
@@ -70,6 +74,8 @@ COPY --from=dynamo_base /usr/local/bin/etcd/ /usr/local/bin/etcd/
 # Add ETCD and CUDA binaries to PATH so cicc and other CUDA tools are accessible
 {% if device == "cuda" %}
 ENV PATH=/usr/local/cuda/nvvm/bin:$PATH
+{% elif device == "rocm" %}
+ENV PATH=/opt/rocm/bin:/opt/rocm/hip/bin:$PATH
 {% endif %}
 ENV PATH=/usr/local/bin/etcd/:$PATH
 
@@ -196,6 +202,10 @@ SHELL ["/bin/bash", "-l", "-o", "pipefail", "-c"]
 ENV NIXL_PREFIX=/opt/intel/intel_nixl
 ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib/x86_64-linux-gnu
 ENV NIXL_PLUGIN_DIR=$NIXL_LIB_DIR/plugins
+{% elif device == "rocm" %}
+ENV NIXL_PREFIX=/opt/amd/amd_rixl
+ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib/x86_64-linux-gnu
+ENV NIXL_PLUGIN_DIR=$NIXL_LIB_DIR/plugins
 {% elif device == "cpu" %}
 ENV NIXL_PREFIX=/opt/nvidia/nvda_nixl
 ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib/x86_64-linux-gnu
@@ -251,6 +261,8 @@ COPY --chown=dynamo: --from=wheel_builder $NIXL_PREFIX $NIXL_PREFIX
 {% if device == "xpu" %}
 {# XPU NIXL uses lib/x86_64-linux-gnu; copy to NIXL_LIB_DIR to ensure lib dir is populated #}
 COPY --chown=dynamo: --from=wheel_builder /opt/intel/intel_nixl/lib/x86_64-linux-gnu/. ${NIXL_LIB_DIR}/
+{% elif device == "rocm" %}
+COPY --chown=dynamo: --from=wheel_builder /opt/amd/amd_rixl/lib/x86_64-linux-gnu/. ${NIXL_LIB_DIR}/
 {% endif %}
 {# For cpu/cuda: NIXL libs are already included in the $NIXL_PREFIX COPY above #}
 COPY --chown=dynamo: --from=wheel_builder /opt/dynamo/dist/nixl/ /opt/dynamo/wheelhouse/nixl/
@@ -424,6 +436,10 @@ RUN uv pip uninstall triton triton-xpu && \
 {% if device == "xpu" or device == "cpu" %}
 SHELL ["bash", "-c"]
 CMD ["bash", "-c", "source /etc/bash.bashrc && exec bash"]
+{% elif device == "rocm" %}
+ENV VLLM_ROCM_USE_AITER=1
+ENTRYPOINT ["/bin/bash"]
+CMD []
 {% else %}
 # In vLLM 0.12 the default sampler changed on the forward pass.
 # We need to enable this to enable the cuda kernels.

@@ -65,6 +65,17 @@ sglang = [
     "cupy-cuda12x>=13.0.0",
 ]
 
+vllm-rocm = [
+    "uvloop",
+    "vllm==0.18.0",
+    "blake3>=1.0.0,<2.0.0",
+]
+
+sglang-rocm = [
+    "uvloop",
+    "sglang[diffusion]==0.5.9",
+]
+
 mocker = [
     "aiconfigurator>=0.7.0",
 ]
@@ -268,6 +279,9 @@ markers = [
     "asyncio: asyncio test marker",
     # Third-party plugin markers
     "timeout: test timeout in seconds (pytest-timeout plugin)",
+    "rocm: marks tests as requiring AMD ROCm",
+    "mi300x: marks tests to run on MI300X",
+    "mi355x: marks tests to run on MI355X",
 ]
 
 # Linting/formatting

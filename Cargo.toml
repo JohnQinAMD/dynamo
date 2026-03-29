@@ -34,6 +34,7 @@ license = "Apache-2.0"
 homepage = "https://github.com/ai-dynamo/dynamo"
 repository = "https://github.com/ai-dynamo/dynamo.git"
 keywords = ["llm", "genai", "inference", "nvidia", "distributed"]
+# AMD ROCm support: build with --features rocm for AMD GPU targets
 
 [workspace.dependencies]
 # Local crates
@@ -75,6 +76,9 @@ chrono = { version = "0.4", default-features = false, features = [
     "serde",
 ] }
 cudarc = { version = "0.19.2", features = ["cuda-version-from-build-system", "fallback-latest"] }
+# ROCm/HIP: when building for AMD, use RIXL instead of NIXL and HIP instead of CUDA
+# Activate with: cargo build --features rocm
+# Override nixl-sys with: [patch.crates-io] nixl-sys = { path = "../RIXL/src/bindings/rust" }
 dashmap = { version = "6.1" }
 derive_builder = { version = "0.20" }
 derive-getters = { version = "0.5" }
@@ -158,3 +162,10 @@ lto = "thin"
 inherits = "release"
 debug = true
 strip = false
+
+# === ROCm/RIXL Build Override ===
+# Uncomment the following to build with RIXL (ROCm port of NIXL).
+# This redirects the nixl-sys crate to use RIXL's Rust bindings.
+# Also set: NIXL_PREFIX=/opt/rocm/rixl
+# [patch.crates-io]
+# nixl-sys = { path = "../RIXL/src/bindings/rust" }

@@ -14,11 +14,18 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("OUT_DIR").unwrap();
 
-    // Track file changes
+    // Track CUDA file changes
     let cu_files = discover_cuda_files();
     for file in &cu_files {
         println!("cargo:rerun-if-changed={}", file.display());
     }
+
+    // Track HIP file changes
+    let hip_files = discover_hip_files();
+    for file in &hip_files {
+        println!("cargo:rerun-if-changed={}", file.display());
+    }
+
     println!(
         "cargo:rerun-if-changed={}",
         Path::new(&manifest_dir).join("cuda/stubs.c").display()
@@ -28,10 +35,16 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KVBM_REQUIRE_CUDA");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
+    println!("cargo:rerun-if-env-changed=KVBM_REQUIRE_ROCM");
+    println!("cargo:rerun-if-env-changed=ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=HIP_PATH");
+    println!("cargo:rerun-if-env-changed=ROCM_ARCHS");
 
-    // Check if CUDA is required (set by Python bindings build)
+    // Check if CUDA or ROCm is required (set by Python bindings build)
     let require_cuda = env::var("KVBM_REQUIRE_CUDA").is_ok();
+    let require_rocm = env::var("KVBM_REQUIRE_ROCM").is_ok();
     let nvcc_available = is_nvcc_available();
+    let hipcc_available = is_hipcc_available();
 
     // Fail early if CUDA required but not available
     if require_cuda && !nvcc_available {
@@ -48,8 +61,23 @@ fn main() {
         );
     }
 
+    // Fail early if ROCm required but not available
+    if require_rocm && !hipcc_available {
+        panic!(
+            "\n\n\
+            ╔════════════════════════════════════════════════════════════════════════╗\n\
+            ║  KVBM_REQUIRE_ROCM is set but hipcc is not available!                  ║\n\
+            ║                                                                        ║\n\
+            ║  Python bindings require real HIP kernels. Please:                     ║\n\
+            ║    1. Install ROCm toolkit with hipcc, or                              ║\n\
+            ║    2. Unset KVBM_REQUIRE_ROCM for stub-only build                      ║\n\
+            ╚════════════════════════════════════════════════════════════════════════╝\n\
+            "
+        );
+    }
+
     // Determine build mode
-    let build_mode = determine_build_mode(nvcc_available);
+    let build_mode = determine_build_mode(nvcc_available, hipcc_available);
 
     // Check if static linking is requested (only applies to CUDA builds, not stubs)
     #[cfg(feature = "static-kernels")]
@@ -66,11 +94,17 @@ fn main() {
             }
             build_cuda_library(&cu_files, &out_dir, use_static);
         }
+        BuildMode::FromSourceHip => {
+            if use_static {
+                println!("cargo:warning=Building HIP kernels from source (static linking)");
+            } else {
+                println!("cargo:warning=Building HIP kernels from source (dynamic linking)");
+            }
+            build_hip_library(&hip_files, &out_dir, use_static);
+        }
         BuildMode::Stubs => {
-            // Stubs always use dynamic linking regardless of static-kernels feature
-            println!("cargo:warning=Building stub kernels (no CUDA available, dynamic linking)");
+            println!("cargo:warning=Building stub kernels (no CUDA/ROCm available, dynamic linking)");
             build_stub_shared_library(&manifest_dir, &out_dir);
-            // Set cfg flag so tests can be skipped
             println!("cargo:rustc-cfg=stub_kernels");
         }
     }
@@ -79,13 +113,17 @@ fn main() {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BuildMode {
     FromSource,
+    FromSourceHip,
     Stubs,
 }
 
-/// Determine the build mode based on nvcc availability.
-fn determine_build_mode(nvcc_available: bool) -> BuildMode {
+/// Determine the build mode based on compiler availability.
+/// Prefers nvcc (CUDA) over hipcc (ROCm) when both are present.
+fn determine_build_mode(nvcc_available: bool, hipcc_available: bool) -> BuildMode {
     if nvcc_available {
         BuildMode::FromSource
+    } else if hipcc_available {
+        BuildMode::FromSourceHip
     } else {
         BuildMode::Stubs
     }
@@ -93,6 +131,35 @@ fn determine_build_mode(nvcc_available: bool) -> BuildMode {
 
 fn is_nvcc_available() -> bool {
     Command::new("nvcc").arg("--version").output().is_ok()
+}
+
+fn is_hipcc_available() -> bool {
+    Command::new("hipcc").arg("--version").output().is_ok()
+        || Command::new("/opt/rocm/bin/hipcc")
+            .arg("--version")
+            .output()
+            .is_ok()
+}
+
+/// Resolve the hipcc binary path, checking ROCM_PATH/HIP_PATH env vars,
+/// then PATH, then the standard /opt/rocm location.
+fn resolve_hipcc() -> String {
+    if let Ok(hip_path) = env::var("HIP_PATH") {
+        let candidate = format!("{}/bin/hipcc", hip_path);
+        if Path::new(&candidate).exists() {
+            return candidate;
+        }
+    }
+    if let Ok(rocm_path) = env::var("ROCM_PATH") {
+        let candidate = format!("{}/bin/hipcc", rocm_path);
+        if Path::new(&candidate).exists() {
+            return candidate;
+        }
+    }
+    if Command::new("hipcc").arg("--version").output().is_ok() {
+        return "hipcc".to_string();
+    }
+    "/opt/rocm/bin/hipcc".to_string()
 }
 
 /// Build CUDA kernels from source.
@@ -246,6 +313,91 @@ fn build_stub_shared_library(manifest_dir: &str, out_dir: &str) {
     println!("cargo:rustc-link-lib=dylib=kvbm_kernels");
 }
 
+/// Build HIP kernels from source using hipcc.
+/// If `use_static` is true, builds a static archive (.a); otherwise builds a shared library (.so).
+fn build_hip_library(hip_files: &[PathBuf], out_dir: &str, use_static: bool) {
+    let arch_flags = get_rocm_arch_flags();
+    let hipcc = resolve_hipcc();
+
+    let tensor_kernels_path = hip_files
+        .iter()
+        .find(|p| p.file_stem().unwrap() == "tensor_kernels")
+        .expect("tensor_kernels.hip not found");
+
+    let obj_path = Path::new(out_dir).join("kvbm_kernels.o");
+
+    let mut hipcc_cmd = Command::new(&hipcc);
+    hipcc_cmd
+        .arg("-c")
+        .arg("-std=c++17")
+        .arg("-O3")
+        .arg("-fPIC")
+        .arg(tensor_kernels_path)
+        .arg("-o")
+        .arg(&obj_path);
+
+    for flag in &arch_flags {
+        hipcc_cmd.arg(flag);
+    }
+
+    println!("cargo:warning=Compiling tensor_kernels.hip to object file with {}...", hipcc);
+    let status = hipcc_cmd
+        .status()
+        .expect("Failed to execute hipcc for object file");
+
+    if !status.success() {
+        panic!("hipcc failed to compile tensor_kernels.hip");
+    }
+
+    if use_static {
+        let ar_path = Path::new(out_dir).join("libkvbm_kernels.a");
+
+        let mut ar_cmd = Command::new("ar");
+        ar_cmd.arg("crus").arg(&ar_path).arg(&obj_path);
+
+        println!("cargo:warning=Creating static archive libkvbm_kernels.a...");
+        let status = ar_cmd
+            .status()
+            .expect("Failed to execute ar for static archive");
+
+        if !status.success() {
+            panic!("ar failed to create static archive");
+        }
+
+        println!("cargo:rustc-link-search=native={}", out_dir);
+        println!("cargo:rustc-link-lib=static=kvbm_kernels");
+
+        add_rocm_library_paths();
+        println!("cargo:rustc-link-lib=amdhip64");
+        println!("cargo:rustc-link-lib=stdc++");
+    } else {
+        let so_path = Path::new(out_dir).join("libkvbm_kernels.so");
+
+        let mut link_cmd = Command::new(&hipcc);
+        link_cmd
+            .arg("-shared")
+            .arg("-o")
+            .arg(&so_path)
+            .arg(&obj_path)
+            .arg("-lamdhip64");
+
+        println!("cargo:warning=Linking kvbm_kernels into shared library (HIP)...");
+        let status = link_cmd
+            .status()
+            .expect("Failed to execute hipcc for linking");
+
+        if !status.success() {
+            panic!("hipcc failed to link shared library");
+        }
+
+        println!("cargo:rustc-link-search=native={}", out_dir);
+        println!("cargo:rustc-link-lib=dylib=kvbm_kernels");
+
+        add_rocm_library_paths();
+        println!("cargo:rustc-link-lib=amdhip64");
+    }
+}
+
 fn discover_cuda_files() -> Vec<PathBuf> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let cuda_dir = Path::new(&manifest_dir).join("cuda");
@@ -259,6 +411,56 @@ fn discover_cuda_files() -> Vec<PathBuf> {
         }
     }
     cu_files
+}
+
+fn discover_hip_files() -> Vec<PathBuf> {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let hip_dir = Path::new(&manifest_dir).join("hip");
+    let mut hip_files = Vec::new();
+
+    if !hip_dir.exists() {
+        return hip_files;
+    }
+
+    for entry in fs::read_dir(hip_dir).expect("Failed to read hip directory") {
+        let entry = entry.expect("Failed to read entry");
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "hip") {
+            hip_files.push(path);
+        }
+    }
+    hip_files
+}
+
+/// Return hipcc `--offload-arch=` flags for the target GPU architectures.
+/// Defaults to gfx942 (MI300X) and gfx950 (MI355X) when ROCM_ARCHS is unset.
+fn get_rocm_arch_flags() -> Vec<String> {
+    let explicit_archs = env::var("ROCM_ARCHS").ok();
+    let arch_list = explicit_archs.as_deref().unwrap_or("gfx942,gfx950");
+
+    let mut flags = Vec::new();
+    for arch in arch_list.split(',') {
+        let arch = arch.trim();
+        if arch.is_empty() {
+            continue;
+        }
+        println!("cargo:warning=Including ROCm target: {}", arch);
+        flags.push(format!("--offload-arch={}", arch));
+    }
+    flags
+}
+
+fn add_rocm_library_paths() {
+    if let Ok(hip_path) = env::var("HIP_PATH") {
+        println!("cargo:rustc-link-search=native={}/lib", hip_path);
+        println!("cargo:rustc-link-search=native={}/lib64", hip_path);
+    } else if let Ok(rocm_path) = env::var("ROCM_PATH") {
+        println!("cargo:rustc-link-search=native={}/lib", rocm_path);
+        println!("cargo:rustc-link-search=native={}/lib64", rocm_path);
+    } else {
+        println!("cargo:rustc-link-search=native=/opt/rocm/lib");
+        println!("cargo:rustc-link-search=native=/opt/rocm/lib64");
+    }
 }
 
 /// Parse CUDA toolkit version from `nvcc --version` output.

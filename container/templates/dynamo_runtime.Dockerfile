@@ -24,10 +24,17 @@ RUN userdel -r ubuntu > /dev/null 2>&1 || true \
     && mkdir -p /etc/profile.d && echo 'umask 002' > /etc/profile.d/00-umask.sh
 
 # NIXL environment variables
+{% if device == "rocm" %}
+ENV NIXL_PREFIX=/opt/amd/amd_rixl \
+    NIXL_LIB_DIR=/opt/amd/amd_rixl/lib/x86_64-linux-gnu \
+    NIXL_PLUGIN_DIR=/opt/amd/amd_rixl/lib/x86_64-linux-gnu/plugins \
+    CARGO_TARGET_DIR=/opt/dynamo/target
+{% else %}
 ENV NIXL_PREFIX=/opt/nvidia/nvda_nixl \
     NIXL_LIB_DIR=/opt/nvidia/nvda_nixl/lib64 \
     NIXL_PLUGIN_DIR=/opt/nvidia/nvda_nixl/lib64/plugins \
     CARGO_TARGET_DIR=/opt/dynamo/target
+{% endif %}
 
 ENV LD_LIBRARY_PATH=\
 ${NIXL_LIB_DIR}:\
@@ -143,7 +150,11 @@ RUN --mount=type=bind,source=./container/deps/requirements.common.txt,target=/tm
     export UV_CACHE_DIR=/home/dynamo/.cache/uv UV_GIT_LFS=1 UV_HTTP_TIMEOUT=300 UV_HTTP_RETRIES=5 && \
     uv pip install \
         --index-strategy unsafe-best-match \
+{% if device == "rocm" %}
+        --extra-index-url https://download.pytorch.org/whl/rocm6.3 \
+{% else %}
         --extra-index-url https://download.pytorch.org/whl/cu130 \
+{% endif %}
         --requirement /tmp/requirements.common.txt \
         --requirement /tmp/requirements.planner.txt \
         --requirement /tmp/requirements.frontend.txt
@@ -158,5 +169,9 @@ RUN chmod g+w ${WORKSPACE_DIR}
 ARG DYNAMO_COMMIT_SHA
 ENV DYNAMO_COMMIT_SHA=$DYNAMO_COMMIT_SHA
 
+{% if device == "rocm" %}
+ENTRYPOINT ["/bin/bash"]
+{% else %}
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+{% endif %}
 CMD []
