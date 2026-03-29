@@ -66,19 +66,42 @@ Measured on AMD Instinct MI355X (gfx950), PyTorch 2.9.1+rocm7.2.1, single GPU.
 
 ## 2-Node Testing (Phase 7)
 
-| Test | Result | Notes |
-|------|--------|-------|
-| Network connectivity (chi2899-chi2900) | PASS | 0.088ms RTT |
-| RDMA devices (Pensando ionic) | PASS | PORT_ACTIVE on both nodes |
+Tested on chi2899 + chi2900, AMD Instinct MI355X, Pensando ionic 400Gb/s RoCE.
+Container: `tasimage/primus:pr-591-ainic` (UCX + RCCL + ANP built-in).
+
+| Test | Result | Details |
+|------|--------|---------|
+| Network connectivity | PASS | 0.088ms RTT between nodes |
+| RDMA devices (Pensando ionic) | PASS | 8x ionic per node, PORT_ACTIVE |
 | GPU memory (per node) | PASS | 309.2GB HBM, 308GB free |
-| RCCL all_reduce (2-node) | BLOCKED | Hangs on init — needs RCCL env config (NCCL_SOCKET_IFNAME, firewall rules) |
-| RIXL nixlbench (2-node) | BLOCKED | nixlbench has HIP compile issues with CU_MEM_HANDLE_TYPE_FABRIC |
+| RCCL 2-node all_reduce | **PASS** | Using Primus AINIC config (NCCL_IB_HCA, NCCL_SOCKET_IFNAME) |
+
+### RCCL 2-Node Bandwidth (AINIC 400Gb/s)
+
+```
+NCCL_IB_HCA=ionic_0:1,...,ionic_7:1
+NCCL_SOCKET_IFNAME=enp193s0f0np0
+Container: tasimage/primus:pr-591-ainic
+
+  all_reduce     1MB:    1.7 GB/s  (0.60ms)
+  all_reduce    10MB:    3.3 GB/s  (3.17ms)
+  all_reduce   100MB:    4.0 GB/s  (26.02ms)
+  all_reduce   500MB:    4.1 GB/s  (126.59ms)
+  all_reduce  1000MB:    4.0 GB/s  (263.86ms)
+```
+
+### RIXL/nixlbench Build
+
+- UCX 1.19.x rebuilt with `--with-rocm` for glibc 2.35 compatibility
+- RIXL rebuilt inside tasimage container (glibc 2.35)
+- nixlbench compiled with ETCD support (`HAVE_ETCD=1`)
+- CU_MEM_HANDLE_TYPE_FABRIC: hipify warning only, not a build blocker
+- UCX connection: needs `UCX_NET_DEVICES` config for Pensando ionic
 
 ## Remaining Work
 
-1. Configure RCCL for multi-node: set `NCCL_SOCKET_IFNAME`, open firewall ports
-2. Fix nixlbench HIP compilation (CU_MEM_HANDLE_TYPE_FABRIC symbol)
-3. Build Dynamo native extension (`maturin develop`) in ROCm container
-4. End-to-end vLLM serving with Dynamo frontend
-5. RIXL UCX RDMA KV cache transfer between nodes
+1. Configure UCX_NET_DEVICES for nixlbench inter-node VRAM transfer
+2. Build Dynamo native extension (`maturin develop`) in ROCm container
+3. End-to-end vLLM serving with Dynamo frontend on MI355X
+4. Full disaggregated serving: prefill on chi2899, decode on chi2900
 
