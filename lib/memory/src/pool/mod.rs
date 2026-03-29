@@ -6,3 +6,8 @@
 pub mod cuda;
 
 pub use cuda::{CudaMemPool, CudaMemPoolBuilder};
+
+#[cfg(feature = "rocm")]
+pub mod hip;
+#[cfg(feature = "rocm")]
+pub use hip::{HipMemPool, HipMemPoolBuilder};

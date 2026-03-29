@@ -1,0 +1,92 @@
+name: ROCm Build Check
+
+on:
+  pull_request:
+    paths:
+      - 'lib/kvbm-kernels/hip/**'
+      - 'lib/memory/src/gpu/**'
+      - 'lib/gpu_memory_service/**/hip_*'
+      - 'container/templates/*Dockerfile*'
+      - 'Cargo.toml'
+      - 'pyproject.toml'
+  push:
+    branches: [amd-additive]
+
+jobs:
+  rocm-lint:
+    name: ROCm Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check HIP kernel syntax
+        run: |
+          grep -q "hipError_t" lib/kvbm-kernels/hip/tensor_kernels.hip
+          grep -q "kvbm_kernels_launch_vectorized_copy" lib/kvbm-kernels/hip/tensor_kernels.hip
+          echo "HIP kernel syntax check passed"
+
+      - name: Check Cargo.toml rocm features
+        run: |
+          grep -q 'rocm = ' lib/memory/Cargo.toml
+          grep -q 'rocm = ' lib/llm/Cargo.toml
+          grep -q 'testing-rocm' lib/kvbm-kernels/Cargo.toml
+          echo "Cargo.toml rocm features present"
+
+      - name: Check pyproject.toml ROCm deps
+        run: |
+          grep -q 'vllm-rocm' pyproject.toml
+          grep -q 'sglang-rocm' pyproject.toml
+          echo "pyproject.toml ROCm deps present"
+
+      - name: Check Dockerfile ROCm blocks
+        run: |
+          grep -q 'device == "rocm"' container/templates/vllm_runtime.Dockerfile
+          grep -q 'device == "rocm"' container/templates/dynamo_runtime.Dockerfile
+          echo "Dockerfile ROCm blocks present"
+
+      - name: Verify upstream compatibility
+        run: |
+          TOTAL_ADD=$(git diff origin/main...HEAD | grep "^+[^+]" | wc -l)
+          TOTAL_DEL=$(git diff origin/main...HEAD | grep "^-[^-]" | wc -l)
+          RATIO=$(echo "scale=1; $TOTAL_ADD * 100 / ($TOTAL_ADD + $TOTAL_DEL + 1)" | bc)
+          echo "Additive ratio: ${RATIO}% (+${TOTAL_ADD} -${TOTAL_DEL})"
+          if [ "$TOTAL_DEL" -gt 100 ]; then
+            echo "WARNING: Too many deletions — may cause upstream merge conflicts"
+            exit 1
+          fi
+
+  rocm-gpu-test:
+    name: ROCm GPU Test
+    runs-on: [self-hosted, rocm, mi355x]
+    if: github.event_name == 'push'
+    container:
+      image: rocm/pytorch:latest
+      options: --device=/dev/kfd --device=/dev/dri --group-add video
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GPU Detection
+        run: rocm-smi --showproductname | head -5
+
+      - name: Compile HIP Kernel
+        run: |
+          hipcc -c -std=c++17 -O3 -fPIC --offload-arch=gfx950 \
+            lib/kvbm-kernels/hip/tensor_kernels.hip -o /tmp/test.o
+          echo "HIP kernel compilation: PASS"
+
+      - name: Link Shared Library
+        run: |
+          hipcc -shared -o /tmp/libkvbm_kernels.so /tmp/test.o -lamdhip64
+          nm -D /tmp/libkvbm_kernels.so | grep kvbm_kernels | wc -l
+          echo "Shared library link: PASS"
+
+      - name: PyTorch GPU Test
+        run: |
+          python3 -c "
+          import torch
+          assert torch.cuda.is_available(), 'No GPU'
+          t = torch.randn(100, 100, device='cuda')
+          r = torch.mm(t, t.T)
+          assert r.shape == (100, 100)
+          print('PyTorch GPU: PASS')
+          "

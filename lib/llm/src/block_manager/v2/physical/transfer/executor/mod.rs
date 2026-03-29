@@ -7,6 +7,9 @@ pub(super) mod cuda;
 mod memcpy;
 mod nixl;
 
+#[cfg(feature = "rocm")]
+pub(super) mod hip;
+
 use super::strategy::select_strategy;
 use super::validation::validate_block_transfer;
 use super::{PhysicalLayout, TransferContext, TransferOptions, TransferPlan, TransferStrategy};

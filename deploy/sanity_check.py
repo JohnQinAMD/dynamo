@@ -1186,6 +1186,147 @@ class GPUInfo(NodeInfo):
         return node
 
 
+class AMDGPUInfo(NodeInfo):
+    """AMD GPU information via amd-smi.
+
+    Displays AMD GPU model, driver version, and VRAM stats.
+    Falls back gracefully when amd-smi is not available.
+    """
+
+    def __init__(self, thorough_check: bool = False):
+        self.thorough_check = thorough_check
+        amd_smi = shutil.which("amd-smi")
+        if not amd_smi:
+            for candidate in [
+                "/usr/bin/amd-smi",
+                "/opt/rocm/bin/amd-smi",
+                "/usr/local/bin/amd-smi",
+            ]:
+                if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+                    amd_smi = candidate
+                    break
+
+        if not amd_smi:
+            super().__init__(
+                label="AMD GPU", desc="amd-smi not found", status=NodeStatus.INFO
+            )
+            return
+
+        try:
+            gpu_list = self._get_amd_gpu_info(amd_smi)
+            if not gpu_list:
+                super().__init__(
+                    label="AMD GPU", desc="no AMD GPUs detected", status=NodeStatus.INFO
+                )
+                return
+
+            if len(gpu_list) == 1:
+                value = gpu_list[0].get("name", "AMD GPU")
+                super().__init__(label="AMD GPU", desc=value, status=NodeStatus.OK)
+                vram = gpu_list[0].get("vram_info")
+                if vram:
+                    self.add_metadata("VRAM", vram)
+            else:
+                value = f"{len(gpu_list)} GPUs"
+                super().__init__(label="AMD GPU", desc=value, status=NodeStatus.OK)
+                for i, gpu in enumerate(gpu_list):
+                    gpu_child = NodeInfo(
+                        label=f"GPU {i}",
+                        desc=gpu.get("name", "AMD GPU"),
+                        status=NodeStatus.OK,
+                    )
+                    vram = gpu.get("vram_info")
+                    if vram:
+                        gpu_child.add_metadata("VRAM", vram)
+                    self.add_child(gpu_child)
+
+            rocm_version = self._get_rocm_version()
+            if rocm_version:
+                rocm_node = NodeInfo(
+                    label="ROCm version", desc=rocm_version, status=NodeStatus.INFO
+                )
+                self.add_child(rocm_node)
+
+        except Exception:
+            super().__init__(
+                label="AMD GPU", desc="detection failed", status=NodeStatus.ERROR
+            )
+
+    @staticmethod
+    def _get_amd_gpu_info(amd_smi: str):
+        """Get AMD GPU info using amd-smi. Returns list of dicts."""
+        gpu_list = []
+        try:
+            result = subprocess.run(
+                [amd_smi, "list"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return gpu_list
+
+            import re
+            for line in result.stdout.strip().splitlines():
+                m = re.match(r"\s*GPU\[(\d+)\]\s*:\s*(.*)", line)
+                if m:
+                    gpu_list.append({"index": int(m.group(1)), "name": m.group(2).strip()})
+
+            for gpu in gpu_list:
+                try:
+                    mem_result = subprocess.run(
+                        [amd_smi, "static", "--gpu", str(gpu["index"]), "--vram"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if mem_result.returncode == 0:
+                        for mline in mem_result.stdout.splitlines():
+                            if "size" in mline.lower() or "total" in mline.lower():
+                                gpu["vram_info"] = mline.strip()
+                                break
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+        return gpu_list
+
+    @staticmethod
+    def _get_rocm_version():
+        """Detect installed ROCm version."""
+        version_paths = [
+            "/opt/rocm/.info/version",
+            "/opt/rocm/include/rocm-core/rocm_version.h",
+        ]
+        for vpath in version_paths:
+            try:
+                with open(vpath) as f:
+                    content = f.read().strip()
+                if content:
+                    import re
+                    m = re.search(r"(\d+\.\d+[\d.]*)", content)
+                    if m:
+                        return m.group(1)
+            except OSError:
+                pass
+
+        rocminfo = shutil.which("rocminfo")
+        if rocminfo:
+            try:
+                result = subprocess.run(
+                    [rocminfo], capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    import re
+                    m = re.search(r"ROCm Runtime Version:\s+([\d.]+)", result.stdout)
+                    if m:
+                        return m.group(1)
+            except Exception:
+                pass
+        return None
+
+
 class FilePermissionsInfo(NodeInfo):
     """File system check for development environment directories
 

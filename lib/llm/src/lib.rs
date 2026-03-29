@@ -46,6 +46,9 @@ pub mod block_manager;
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+#[cfg(feature = "rocm")]
+pub mod hip;
+
 /// Reads a JSON file, extracts a specific field, and deserializes it into type T.
 ///
 /// # Arguments

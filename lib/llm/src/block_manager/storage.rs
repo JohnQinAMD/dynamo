@@ -72,6 +72,9 @@ pub mod nixl;
 pub mod object;
 pub mod torch;
 
+#[cfg(feature = "rocm")]
+pub mod hip;
+
 pub use cuda::*;
 pub use disk::*;
 pub use object::ObjectStorage;

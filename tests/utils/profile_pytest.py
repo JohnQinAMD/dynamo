@@ -61,6 +61,66 @@ from dataclasses import dataclass, field
 
 import pynvml
 
+
+# ---------------------------------------------------------------------------
+# AMD ROCm GPU monitoring fallback
+# ---------------------------------------------------------------------------
+
+def _get_gpu_monitoring_backend():
+    """Detect GPU monitoring backend: pynvml or amdsmi."""
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        return "nvidia"
+    except (ImportError, Exception):
+        pass
+    try:
+        import amdsmi
+        amdsmi.amdsmi_init()
+        return "amd"
+    except (ImportError, Exception):
+        pass
+    return "none"
+
+
+_GPU_MONITOR_BACKEND = _get_gpu_monitoring_backend()
+
+
+def _get_gpu_memory_info_portable(device_index=0):
+    """Get GPU memory info, works with both NVIDIA and AMD GPUs.
+
+    Returns a dict with keys 'total', 'used', 'free' (in bytes), or None
+    if no supported GPU monitoring backend is available.
+    """
+    if _GPU_MONITOR_BACKEND == "nvidia":
+        import pynvml
+        handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return {"total": info.total, "used": info.used, "free": info.free}
+    elif _GPU_MONITOR_BACKEND == "amd":
+        import amdsmi
+        devices = amdsmi.amdsmi_get_processor_handles()
+        if device_index < len(devices):
+            vram = amdsmi.amdsmi_get_gpu_vram_usage(devices[device_index])
+            return {
+                "total": vram["vram_total"],
+                "used": vram["vram_used"],
+                "free": vram["vram_total"] - vram["vram_used"],
+            }
+    return None
+
+
+def _get_gpu_count_portable():
+    """Get the number of GPUs available, using whichever backend is present."""
+    if _GPU_MONITOR_BACKEND == "nvidia":
+        import pynvml
+        pynvml.nvmlInit()
+        return pynvml.nvmlDeviceGetCount()
+    elif _GPU_MONITOR_BACKEND == "amd":
+        import amdsmi
+        return len(amdsmi.amdsmi_get_processor_handles())
+    return 0
+
 logger = logging.getLogger(__name__)
 
 # Safety margin for VRAM tier recommendations.  Peak VRAM is multiplied by

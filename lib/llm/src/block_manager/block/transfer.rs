@@ -7,6 +7,9 @@ mod memcpy;
 mod nixl;
 mod strategy;
 
+#[cfg(feature = "rocm")]
+mod hip;
+
 use super::*;
 
 use crate::block_manager::storage::{

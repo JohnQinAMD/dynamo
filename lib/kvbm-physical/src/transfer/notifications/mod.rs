@@ -22,6 +22,9 @@ pub mod nixl_events;
 pub mod nixl_status;
 pub mod notification;
 
+#[cfg(feature = "rocm")]
+pub mod hip_event;
+
 pub use cuda_event::CudaEventChecker;
 pub use nixl_events::{RegisterNixlNotification, process_nixl_notification_events};
 pub use nixl_status::NixlStatusChecker;
