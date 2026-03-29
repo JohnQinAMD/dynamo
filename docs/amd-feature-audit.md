@@ -139,7 +139,9 @@ SGLang MoRI disagg servers        SERVERS UP ✓         03-29
   ionic ABI fixed in container   RESOLVED
 Dynamo maturin build              FULLY TESTED ✓       03-29
   rocm/vllm + rocm/sgl-dev       BOTH WORK
-KV-Cache-Aware Routing            NOT TESTED (needs 2+ workers)
+2-worker aggregated serving        FULLY TESTED ✓       03-29
+  23.1 req/s round-robin          MEASURED
+KV-Cache-Aware Routing            NOT TESTED (needs Dynamo router)
 KVBM end-to-end offload           NOT TESTED (needs full stack)
 RIXL UCX 2-node VRAM transfer     FULLY TESTED ✓       03-29
   39.4 GB/s peak (79% of 400G)   MEASURED
