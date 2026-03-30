@@ -52,10 +52,10 @@
 |------|--------|--------|
 | Disagg architecture (Qwen-0.5B) | **DONE** | Pipeline works end-to-end |
 | Disagg DSV3 routing | **DONE** | Both workers register, requests route |
-| Disagg DSV3 2-node (TCP) | **BLOCKED** | Mooncake TCP KV transfer unreliable |
-| Disagg DSV3 1-node (2xTP4) | **BLOCKED** | OOM: 2x DSV3 TP=4 exceeds memory |
-| Mooncake RDMA init | **PARTIAL** | ionic_0 found, ibv_reg_mr ENOMEM |
-| RIXL 2-node raw transfer | **DONE** | 39.4 GB/s (79% of 400Gb/s) |
+| Disagg DSV3 mooncake (TCP) | **BLOCKED** | TCP KV transfer unreliable cross-node |
+| Disagg DSV3 nixl/RIXL backend | **BLOCKED** | VRAM registration fails (no GDR for ionic+AMD) |
+| Disagg DSV3 1-node (2xTP4) | **BLOCKED** | OOM: 2x DSV3 TP=4 exceeds node memory |
+| RIXL 2-node DRAM transfer | **DONE** | 39.4 GB/s (79% of 400Gb/s) |
 
 ### Benchmark 4: Dynamic Planner
 
@@ -111,5 +111,10 @@
 
 ## Remaining
 
-1. **Disagg KV transfer**: Mooncake RDMA init finds ionic but ibv_reg_mr fails with ENOMEM. TCP fallback unreliable. Fix: increase locked memory limits or use different RDMA memory registration approach.
+1. **Disagg KV transfer**: Root cause = no GPU Direct RDMA between ionic NICs and AMD GPUs.
+   - Mooncake backend: ibv_reg_mr fails ENOMEM for GPU memory (no GDR)
+   - RIXL/nixl backend: `register_memory(kv_addrs, "VRAM")` → NIXL_ERR_BACKEND
+   - TCP fallback: unreliable for multi-GB KV cache transfers
+   - **Fix needed**: CPU-mediated transfer path (VRAM→DRAM→RDMA→DRAM→VRAM) or AMD GPU peer memory kernel module
+   - DRAM-to-DRAM RIXL transfer verified at 39.4 GB/s
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
