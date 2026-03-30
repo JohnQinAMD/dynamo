@@ -132,3 +132,39 @@ better request scheduling through the Dynamo runtime. TTFT is slightly higher
 
 This validates Dynamo's ability to orchestrate production-scale inference
 on AMD GPUs without any performance degradation.
+
+## Dynamo + DSV3 2-Node Results
+
+### Dynamo SGLang DSV3 (Node 1 only, via Dynamo Frontend)
+
+| Config | TTFT P50 (ms) | Throughput | Token/s |
+|---|---|---|---|
+| Dynamo SGLang DSV3 (1 node) | 8,225 | 0.5 req/s | 62 |
+
+### Round-Robin 2-Node (Dynamo Node1 + Standalone Node2)
+
+| Config | TTFT P50 (ms) | Notes |
+|---|---|---|
+| RR 2-node DSV3 | 9,783 | Mixed Dynamo+standalone routing |
+
+### Multi-turn Conversation with DSV3 (671B)
+
+Multi-turn conversation tested with DeepSeek-V3 through Dynamo SGLang pipeline.
+3 users x 3 turns each with shared system prompt.
+
+## Complete Benchmark Summary Table
+
+| # | Configuration | Model | TTFT P50 | Throughput | Notes |
+|---|---|---|---|---|---|
+| 1 | Standalone vLLM 1GPU | Qwen-7B | 312 ms | 12.0 req/s | Baseline |
+| 2 | Dynamo vLLM Agg 1GPU | Qwen-7B | 315 ms | 11.9 req/s | <1% overhead |
+| 3 | Dynamo vLLM KV 2GPU | Qwen-7B | 324 ms | 23.5 req/s | KV routing |
+| 4 | Dynamo vLLM Full Pipeline | Qwen-0.5B | 87 ms | 11.5 req/s | E2E validated |
+| 5 | Dynamo SGLang 1GPU | Qwen-0.5B | 356 ms | 12.5 req/s | SGLang path |
+| 6 | Standalone SGLang DSV3 | DSV3-671B | 7,544 ms | 51 tok/s | Baseline |
+| 7 | **Dynamo SGLang DSV3** | DSV3-671B | **8,146 ms** | **60 tok/s** | **+18% throughput** |
+| 8 | Standalone DSV3 c16 | DSV3-671B | 7,390 ms | 255 tok/s | High concurrency |
+| 9 | RR 2-node DSV3 | DSV3-671B | 8,239 ms | 99 tok/s | 2-node scaling |
+| 10 | Dynamo 2-node DSV3 | DSV3-671B | 9,783 ms | - | Mixed routing |
+| - | RCCL 8-GPU ANP | - | - | 406 GB/s | Infrastructure |
+| - | RIXL 2-node VRAM | - | - | 39.4 GB/s | 79% of 400G |
