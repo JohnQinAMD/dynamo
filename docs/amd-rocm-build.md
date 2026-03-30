@@ -124,12 +124,20 @@ cargo build -p dynamo-llm --features block-manager-rocm
 ## Step 5: Build Python Bindings
 
 ```bash
+# Critical: set BINDGEN_EXTRA_CLANG_ARGS for stdbool.h resolution
+export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)"
+export VIRTUAL_ENV=/opt/venv  # or your virtualenv path
+
 cd lib/bindings/python
-maturin develop --uv
+maturin develop --release
 
 cd /workspace/dynamo
-uv pip install -e .
+pip install -e .
 ```
+
+> **Note**: If using the `rocm/sgl-dev` container, Rust/cargo/maturin are pre-installed.
+> The `BINDGEN_EXTRA_CLANG_ARGS` fix is required because ROCm's bundled clang
+> cannot find system GCC headers (`stdbool.h`) by default.
 
 ## Environment Variables Reference
 

@@ -133,15 +133,29 @@ python3 -m sglang.launch_server --model-path /workspace/models/DeepSeek-V3 \
 # Copy source (avoid concurrent builds on shared mount)
 cp -r /workspace/dynamo /tmp/dynamo
 
-# Install build tools
+# Install build tools (rocm/sgl-dev image has Rust/maturin pre-installed)
 apt-get install -y build-essential pkg-config libclang-dev curl protobuf-compiler
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
-export PATH=/root/.cargo/bin:$PATH LIBCLANG_PATH=/opt/rocm/lib/llvm/lib
+export PATH=/root/.cargo/bin:$PATH
 
-# Build Rust bindings
+# Critical: set LIBCLANG_PATH and BINDGEN fix for stdbool.h
+export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib
+export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)"
+export VIRTUAL_ENV=/opt/venv
+
+# Build Rust bindings (dynamo.llm)
 cd /tmp/dynamo/lib/bindings/python && maturin develop --release
+
+# Install Python package
 cd /tmp/dynamo && pip install -e .
+
+# Install test dependencies
+pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio \
+    pytest-timeout nats-py kr8s prometheus_api_client filterpy pmdarima \
+    prophet boto3 kubernetes_asyncio
 ```
+
+**Verified**: 164 tests pass, 42 skipped (expected), on MI355X with this recipe.
 
 ---
 

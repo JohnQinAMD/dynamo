@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four core features against NVIDIA's published benchmarks. **20 tests completed** across 6 MI355X nodes, with **8 bugs found and fixed**.
+We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four core features against NVIDIA's published benchmarks. **164 pytest tests pass** on MI355X (42 skipped, 20 NVIDIA-blocked), plus **20 integration tests** across 6 nodes, with **8 bugs found and fixed**.
 
 | Feature | NVIDIA Claim | AMD MI355X Result | Status |
 |---------|-------------|-------------------|--------|

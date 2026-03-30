@@ -2,7 +2,7 @@
 
 > Comprehensive plan to bring NVIDIA Dynamo's 68-file test suite to full ROCm coverage on MI300X / MI325X / MI355X.
 
-**Status**: The `rocm`, `mi300x`, `mi355x` pytest markers are registered in `pyproject.toml` but **not applied to any test**. InferenceX `amd-master.yaml` benchmarks use `sglang`/`vllm`/`atom` frameworks — no `dynamo-*` entries yet. This plan fills those gaps.
+**Status**: **164 tests pass on MI355X** (42 skipped, 1 infra error). Validated on `chi2896` using `rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2` with `maturin develop --release`.
 
 ---
 
@@ -10,11 +10,34 @@
 
 | Metric | Count | Notes |
 |--------|-------|-------|
-| Total test files (`dynamo/tests/`) | 68 | All written for NVIDIA/CUDA |
-| Tests with `@pytest.mark.rocm` | **0** | Marker registered but never used |
-| Manual ROCm tests (performance report) | 18 | Shell scripts at workspace root, not pytest |
-| ROCm CI workflow | 1 | Build/lint only — no GPU test execution |
-| InferenceX AMD + Dynamo configs | **0** | `amd-master.yaml` has no `dynamo-*` framework entries |
+| Total test files (`dynamo/tests/`) | 68+ | Upstream + AMD-additive tests |
+| Tests passing on MI355X | **164** | Full suite run on chi2896 |
+| Tests skipped (expected) | **42** | vLLM not installed (34), RIXL not in image (2), ionic in Docker (1), env vars (5) |
+| Tests blocked (NVIDIA-only) | **20** | TRT-LLM (6), vLLM Python 3.12 gap (14) |
+| Manual ROCm tests (performance report) | 20 | Includes DRAM staging + mooncake patch |
+| ROCm CI workflow | 1 | Build/lint + GPU test execution |
+| Container | 1 | `rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2` |
+
+### Build Recipe (required for `dynamo.llm`)
+
+```bash
+docker run --rm -it --device=/dev/kfd --device=/dev/dri --group-add video \
+    --shm-size 64G -v /mnt/vast/john/rocm-dynamo:/workspace \
+    rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+
+# Inside container:
+cp -r /workspace/dynamo /tmp/dynamo && cd /tmp/dynamo
+export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib
+export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)"
+export VIRTUAL_ENV=/opt/venv
+cd lib/bindings/python && maturin develop --release
+cd /tmp/dynamo && pip install -e .
+pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio pytest-timeout \
+    nats-py kr8s prometheus_api_client filterpy pmdarima prophet boto3 kubernetes_asyncio
+
+# Run all tests:
+python3 -m pytest tests/ --no-header -q --tb=no  # 164 passed, 42 skipped
+```
 
 ---
 
@@ -251,7 +274,7 @@ KVBM provides 2.17-3.34x multi-turn TTFT improvement on AMD. These tests need HI
 |---------|--------|---------------|-------------|
 | **vLLM Python 3.12 vs 3.10** | All vLLM backend tests | 14 | Build maturin wheel for Py3.12, or custom Py3.10 vLLM container |
 | **TRT-LLM NVIDIA-only** | All TRT-LLM tests | 6 | N/A — skip permanently with `@pytest.mark.skip(reason="TRT-LLM NVIDIA-only")` |
-| **NIXL/RIXL VRAM registration** | RIXL-based disagg | 2 | Fix GPU memory registration in RIXL |
+| ~~NIXL/RIXL VRAM registration~~ | ~~RIXL-based disagg~~ | ~~2~~ | **FIXED** — DRAM staging monkey-patch (`nixl_rocm_staging.py`) |
 | **HIP KVBM kernel linkage** | KVBM integration tests | 6 | Complete `cargo build --features block-manager-rocm` pipeline |
 
 ---
