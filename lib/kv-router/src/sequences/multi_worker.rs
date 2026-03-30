@@ -158,7 +158,12 @@ impl<P: SequencePublisher + 'static> ActiveSequencesMultiWorker<P> {
         router_id: u64,
         worker_type: &'static str,
     ) -> Self {
-        assert!(block_size > 1, "block_size must be greater than 1");
+        let block_size = if block_size <= 1 {
+            tracing::warn!("block_size={block_size} is too small for KV routing, defaulting to 16");
+            16
+        } else {
+            block_size
+        };
 
         Self {
             workers: RwLock::new(WorkerTable::new(block_size, &dp_range)),
