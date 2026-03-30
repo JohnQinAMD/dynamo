@@ -61,10 +61,14 @@
 
 ### Benchmark 4: Dynamic Planner
 
-| Test | Status |
-|------|--------|
-| Module imports | DONE |
-| Planner with workers | TODO (K8s) |
+| Test | Status | Result |
+|------|--------|--------|
+| Module imports | **DONE** | All 5 classes (DisaggPlanner, Prefill, Decode, Agg, Virtual) |
+| PlannerConfig unit tests | **DONE** | 8/8 PASSED |
+| Scaling unit tests | SKIPPED | Requires vLLM FPM (not available in SGLang container) |
+| Virtual mode config | **DONE** | environment=virtual, backend=sglang, load_scaling works |
+| Planner with real workers | TODO | Needs Prometheus + workers with FPM |
+| K8s deployment | TODO | Needs AMD GPU Operator |
 
 ## Performance Summary — DSV3 (671B) on MI355X
 
