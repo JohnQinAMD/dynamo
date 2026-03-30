@@ -29,6 +29,7 @@ pytestmark = [
     pytest.mark.post_merge,
     pytest.mark.parallel,
     pytest.mark.model(TEST_MODEL),
+    pytest.mark.rocm,
 ]
 
 
