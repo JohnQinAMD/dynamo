@@ -203,7 +203,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | KV Router throughput | — | **1,427 tok/s** (c=32) | RR collapses, KV stable |
 | KVBM multi-turn | 2.2–12x | **2.17–3.34x** | AMD shows strong early-turn gains |
 | Disagg P/D (DSV3) | Working | **7.4 req/s, 475 tok/s (100% ok)** | MoRI RDMA, matched subnets |
-| Disagg P/D (Qwen) | — | **76.2 req/s** cross-node | Fully working via TCP |
+| Disagg P/D (Qwen) | — | **106.6 req/s, P50=68ms** | MoRI RDMA, cross-node |
 | Dynamic Planner | Working | **8/8 tests PASSED** | Virtual mode validated |
 | Standalone DSV3 peak | — | **17.3 req/s, 1,108 tok/s** | Single MI355X node |
 | RIXL transfer | — | **39.4 GB/s** | 79% of 400Gb/s line rate |
@@ -213,13 +213,13 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 
 ## 10. Remaining Work
 
-| Item | Effort | Dependency | Priority |
-|------|--------|------------|----------|
-| ~~DSV3 disagg reliability~~ | ~~Medium~~ | ~~Ionic backend + DCQCN~~ | **DONE** |
-| SGLang FPM relay for Planner | Medium | SGLang scheduler metrics API | Medium |
-| K8s deployment + Planner | Medium | AMD GPU Operator | Medium |
-| 100K query KV routing | Low | Workload generator | Low |
-| vLLM backend integration | Medium | vLLM ROCm + Dynamo frontend | Low |
+| Item | Effort | Status |
+|------|--------|--------|
+| ~~DSV3 disagg reliability~~ | — | **DONE** (7.4 req/s, 100% ok) |
+| ~~SGLang FPM relay~~ | — | **DONE** (3/3 tests passed) |
+| ~~K8s CRDs + infra~~ | — | **DONE** (7 CRDs, etcd, NATS deployed) |
+| K8s Planner integration test | Low | Planner runs in virtual mode; needs E2E K8s test |
+| vLLM backend integration | Medium | vLLM ROCm + Dynamo frontend |
 
 ---
 
@@ -235,14 +235,15 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | 6 | KVBM 15×10 multi-turn | 1 | T0: **3.34x** improvement |
 | 7 | KVBM 15×20 multi-turn | 1 | T5: **2.17x** improvement |
 | 8 | Disagg single-node (Qwen) | 1 | Pipeline verified end-to-end |
-| 9 | Disagg cross-node (Qwen, TCP) | 2 | **76.2 req/s** at c=8, P50=91ms |
+| 9 | **Disagg cross-node (Qwen, MoRI RDMA)** | 2 | **106.6 req/s** at c=8, P50=68ms |
 | 10 | **Disagg DSV3 MoRI RDMA** | 2 | **7.4 req/s, 475 tok/s, 100% ok** |
 | 11 | CUDA graph fix | 1 | `SGLANG_AITER_MLA_PERSIST=False` → **11.0x** |
 | 12 | RIXL 2-node transfer | 2 | **39.4 GB/s** (79% of 400Gb/s) |
 | 13 | RCCL 8-GPU all_reduce | 1 | **406 GB/s** |
 | 14 | Standalone verify (2 runs) | 1 | Consistent peak 17+ req/s at c=16 |
 | 15 | Planner unit tests | 1 | **8/8 PASSED**, virtual mode config OK |
+| 16 | SGLang FPM relay | 1 | **3/3 tests PASSED**, live worker verified |
 
 ---
 
-*Report generated from 15 completed tests across 6 MI355X nodes. All results verified with multiple runs. Code committed to `amd-additive` branch (34 commits, 76 files changed).*
+*Report generated from 16 completed tests across 6 MI355X nodes. All results verified with multiple runs. Code committed to `amd-additive` branch.*
