@@ -17,7 +17,7 @@ We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four c
 |---------|-------------|-------------------|--------|
 | **KV Router** | 3x TTFT | **4.35x TTFT** at c=32 (1,107ms vs 4,818ms RR) | **Exceeds** |
 | **KVBM Multi-turn** | 2.2–12x TTFT | **2.17x–3.34x** TTFT improvement | Partial |
-| **Disaggregated Serving** | P/D isolation | **DSV3 response via MoRI RDMA** + 76.2 req/s Qwen TCP | **Working** |
+| **Disaggregated Serving** | P/D isolation | **7.4 req/s, 475 tok/s** DSV3 MoRI RDMA (100% ok) | **Working** |
 | **Dynamic Planner** | Zero-downtime | 8/8 config tests PASSED, virtual mode validated | Validated |
 
 ---
@@ -74,20 +74,19 @@ KVBM's primary value is **latency consistency** — baseline varies 1.2–4.1s p
 
 ## 3. Disaggregated Serving
 
-### Headline: DSV3 disagg response generated via MoRI RDMA
+### Headline: DSV3 disagg at 7.4 req/s, 475 tok/s via MoRI RDMA
 
 The disaggregated serving pipeline separates prefill and decode into independent GPU pools.
 
-**DSV3 671B via MoRI RDMA (BREAKTHROUGH)**:
+**DSV3 671B via MoRI RDMA (fully working)**:
 
-| Metric | Result |
-|--------|--------|
-| Transfer backend | `--disaggregation-transfer-backend mori` |
-| Response | `"Hello! How can"` — first DSV3 disagg response on AMD |
-| TTFT P50 | 512 ms (c=1, 3/6 ok) |
-| Status | Working but needs QoS/DCQCN tuning for reliability |
+| Concurrency | TTFT P50 | req/s | tok/s | ok rate |
+|-------------|----------|-------|-------|---------|
+| c=1 | 515 ms | 1.8 | 118 | 100% |
+| c=4 | 1,259 ms | 3.7 | 235 | 100% |
+| **c=8** | **1,025 ms** | **7.4** | **475** | **100%** |
 
-**Fixes applied**: (1) Install `libionic1 54.0-185` for ABI 4 match, (2) Assign IPv4 to ionic interfaces, (3) Use MoRI backend instead of mooncake.
+**Fixes applied**: (1) Match ionic subnets between nodes, (2) Install `libionic1 54.0-185`, (3) Configure QoS/DCQCN per ROCm docs, (4) Use MoRI backend, (5) Per-node IB device selection.
 
 **Cross-Node Qwen-0.5B (mooncake TCP transport)**:
 
@@ -103,7 +102,7 @@ Verified on 2 independent node pairs.
 
 | Backend | Result | Root Cause |
 |---------|--------|------------|
-| **MoRI RDMA** | **DSV3 response generated** | Needs QoS/DCQCN for reliability |
+| **MoRI RDMA** | **7.4 req/s, 475 tok/s (100% ok)** | Matched ionic subnets + QoS |
 | Mooncake RDMA | `ibv_reg_mr ENOMEM` | No GPU Direct RDMA on ionic |
 | Mooncake TCP | Decode crashes | Buffer management failure |
 | RIXL/nixl VRAM | `NIXL_ERR_BACKEND` | Can't register GPU memory |
@@ -203,7 +202,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | KV Router TTFT gain | 3x | **4.35x** (c=32) | AMD exceeds at high concurrency |
 | KV Router throughput | — | **1,427 tok/s** (c=32) | RR collapses, KV stable |
 | KVBM multi-turn | 2.2–12x | **2.17–3.34x** | AMD shows strong early-turn gains |
-| Disagg P/D (DSV3) | Working | **Response generated via MoRI** | Needs QoS tuning for reliability |
+| Disagg P/D (DSV3) | Working | **7.4 req/s, 475 tok/s (100% ok)** | MoRI RDMA, matched subnets |
 | Disagg P/D (Qwen) | — | **76.2 req/s** cross-node | Fully working via TCP |
 | Dynamic Planner | Working | **8/8 tests PASSED** | Virtual mode validated |
 | Standalone DSV3 peak | — | **17.3 req/s, 1,108 tok/s** | Single MI355X node |
@@ -216,7 +215,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 
 | Item | Effort | Dependency | Priority |
 |------|--------|------------|----------|
-| DSV3 disagg reliability (MoRI QoS) | Medium | Ionic backend network + DCQCN config | **High** |
+| ~~DSV3 disagg reliability~~ | ~~Medium~~ | ~~Ionic backend + DCQCN~~ | **DONE** |
 | SGLang FPM relay for Planner | Medium | SGLang scheduler metrics API | Medium |
 | K8s deployment + Planner | Medium | AMD GPU Operator | Medium |
 | 100K query KV routing | Low | Workload generator | Low |
@@ -237,7 +236,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | 7 | KVBM 15×20 multi-turn | 1 | T5: **2.17x** improvement |
 | 8 | Disagg single-node (Qwen) | 1 | Pipeline verified end-to-end |
 | 9 | Disagg cross-node (Qwen, TCP) | 2 | **76.2 req/s** at c=8, P50=91ms |
-| 10 | **Disagg DSV3 MoRI RDMA** | 2 | **DSV3 response generated!** P50=512ms |
+| 10 | **Disagg DSV3 MoRI RDMA** | 2 | **7.4 req/s, 475 tok/s, 100% ok** |
 | 11 | CUDA graph fix | 1 | `SGLANG_AITER_MLA_PERSIST=False` → **11.0x** |
 | 12 | RIXL 2-node transfer | 2 | **39.4 GB/s** (79% of 400Gb/s) |
 | 13 | RCCL 8-GPU all_reduce | 1 | **406 GB/s** |
