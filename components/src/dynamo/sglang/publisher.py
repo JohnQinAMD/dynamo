@@ -405,7 +405,11 @@ async def setup_sgl_metrics(
 
     publisher.init_engine_metrics_publish()
     publisher.init_kv_event_publish()
-    publisher.init_fpm_relay(worker_id=str(generate_endpoint.lease_id()))
+    try:
+        worker_id = str(id(generate_endpoint))
+        publisher.init_fpm_relay(worker_id=worker_id)
+    except Exception as e:
+        logging.warning(f"FPM relay init skipped: {e}")
 
     task = asyncio.create_task(publisher.run())
     logging.info("SGLang metrics loop started")
