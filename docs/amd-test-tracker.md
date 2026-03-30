@@ -51,9 +51,11 @@
 | Test | Status | Result |
 |------|--------|--------|
 | Disagg architecture (Qwen-0.5B) | **DONE** | Pipeline works end-to-end |
-| Disagg DSV3 routing | **DONE** | Both workers register, requests route correctly |
-| Disagg DSV3 KV transfer | **BLOCKED** | Bootstrap connection drops (needs RIXL/UCX RDMA) |
-| RIXL 2-node transfer | **DONE** | 39.4 GB/s (79% of 400Gb/s) |
+| Disagg DSV3 routing | **DONE** | Both workers register, requests route |
+| Disagg DSV3 2-node (TCP) | **BLOCKED** | Mooncake TCP KV transfer unreliable |
+| Disagg DSV3 1-node (2xTP4) | **BLOCKED** | OOM: 2x DSV3 TP=4 exceeds memory |
+| Mooncake RDMA init | **PARTIAL** | ionic_0 found, ibv_reg_mr ENOMEM |
+| RIXL 2-node raw transfer | **DONE** | 39.4 GB/s (79% of 400Gb/s) |
 
 ### Benchmark 4: Dynamic Planner
 
@@ -109,5 +111,5 @@
 
 ## Remaining
 
-1. **Disagg KV transfer**: Needs RIXL/UCX RDMA between disagg nodes (bootstrap connection drops)
+1. **Disagg KV transfer**: Mooncake RDMA init finds ionic but ibv_reg_mr fails with ENOMEM. TCP fallback unreliable. Fix: increase locked memory limits or use different RDMA memory registration approach.
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
