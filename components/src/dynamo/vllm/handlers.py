@@ -27,11 +27,16 @@ from dynamo._core import Context
 from dynamo.common.memory.multimodal_embedding_cache_manager import (
     MultimodalEmbeddingCacheManager,
 )
-from dynamo.common.multimodal.embedding_transfer import (
-    LocalEmbeddingReceiver,
-    NixlReadEmbeddingReceiver,
-    NixlWriteEmbeddingReceiver,
-)
+try:
+    from dynamo.common.multimodal.embedding_transfer import (
+        LocalEmbeddingReceiver,
+        NixlReadEmbeddingReceiver,
+        NixlWriteEmbeddingReceiver,
+    )
+except ImportError:
+    LocalEmbeddingReceiver = None
+    NixlReadEmbeddingReceiver = None
+    NixlWriteEmbeddingReceiver = None
 from dynamo.common.multimodal.image_loader import ImageLoader
 from dynamo.common.utils.engine_response import normalize_finish_reason
 from dynamo.common.utils.input_params import InputParamManager

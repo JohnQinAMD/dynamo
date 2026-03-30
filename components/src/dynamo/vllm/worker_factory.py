@@ -22,11 +22,16 @@ from .args import Config
 from .constants import DisaggregationMode
 from .handlers import DecodeWorkerHandler, PrefillWorkerHandler
 from .health_check import VllmHealthCheckPayload, VllmPrefillHealthCheckPayload
-from .multimodal_handlers import (
-    EncodeWorkerHandler,
-    MultimodalDecodeWorkerHandler,
-    MultimodalPDWorkerHandler,
-)
+try:
+    from .multimodal_handlers import (
+        EncodeWorkerHandler,
+        MultimodalDecodeWorkerHandler,
+        MultimodalPDWorkerHandler,
+    )
+except ImportError:
+    EncodeWorkerHandler = None
+    MultimodalDecodeWorkerHandler = None
+    MultimodalPDWorkerHandler = None
 from .publisher import StatLoggerFactory
 
 logger = logging.getLogger(__name__)
