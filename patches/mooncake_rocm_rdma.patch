@@ -1,0 +1,69 @@
+--- a/mooncake-transfer-engine/src/transport/rdma_transport/rdma_context.cpp
++++ b/mooncake-transfer-engine/src/transport/rdma_transport/rdma_context.cpp
+@@ -203,7 +203,33 @@
+                       << "shrink it to " << globalConfig().max_mr_size;
+         length = (size_t)globalConfig().max_mr_size;
+     }
+-#if !defined(WITH_NVIDIA_PEERMEM) && defined(USE_CUDA)
++#if defined(USE_HIP)
++    // ROCm path: detect GPU vs CPU memory.
++    // On AMD with Pensando ionic NICs, ibv_reg_mr(GPU VRAM) returns ENOMEM
++    // because ionic lacks GPU Direct RDMA.
++    hipPointerAttribute_t ptrAttrs;
++    memset(&ptrAttrs, 0, sizeof(ptrAttrs));
++    hipError_t hip_err = hipPointerGetAttributes(&ptrAttrs, addr);
++
++    if (hip_err == hipSuccess && ptrAttrs.type == hipMemoryTypeDevice) {
++        mrMeta.addr = addr;
++        mrMeta.mr = ibv_reg_mr(pd_, addr, length, access);
++        if (!mrMeta.mr) {
++            if (errno == ENOMEM) {
++                LOG(WARNING)
++                    << "ROCm: ibv_reg_mr(GPU) ENOMEM at " << addr
++                    << " length=" << length
++                    << " NIC does not support GPU Direct RDMA.";
++            } else {
++                PLOG(ERROR) << "ROCm: ibv_reg_mr(GPU) failed at " << addr;
++            }
++            return ERR_CONTEXT;
++        }
++    } else {
++        mrMeta.addr = addr;
++        mrMeta.mr = ibv_reg_mr(pd_, addr, length, access);
++    }
++#elif !defined(WITH_NVIDIA_PEERMEM) && defined(USE_CUDA)
+     // Implement register memory in a way that does not assume the presence of
+     // nvidia-peermem. If memory is on CPU call ibv_reg_mr() as usual. If memory
+     // is on GPU then use ibv_reg_dmabuf_mr() instead which does not require
+--- a/mooncake-transfer-engine/src/config.cpp
++++ b/mooncake-transfer-engine/src/config.cpp
+@@ -100,6 +100,29 @@
+             LOG(WARNING) << "Ignore value from environment variable MC_MAX_SGE";
+     }
+ 
++#if defined(USE_HIP)
++    // Auto-detect Pensando ionic NICs and reduce max_sge.
++    if (!max_sge_env) {
++        struct ibv_device **dev_list = ibv_get_device_list(nullptr);
++        if (dev_list) {
++            for (int i = 0; dev_list[i]; ++i) {
++                struct ibv_context *ctx = ibv_open_device(dev_list[i]);
++                if (!ctx) continue;
++                struct ibv_device_attr attr;
++                if (ibv_query_device(ctx, &attr) == 0) {
++                    // Pensando vendor_id = 0x1dd8
++                    if (attr.vendor_id == 0x1dd8 && config.max_sge > 2) {
++                        config.max_sge = 2;
++                        LOG(INFO) << "Detected Pensando ionic NIC, setting max_sge=2";
++                    }
++                }
++                ibv_close_device(ctx);
++            }
++            ibv_free_device_list(dev_list);
++        }
++    }
++#endif
++
+     const char *max_wr_env = std::getenv("MC_MAX_WR");
+     if (max_wr_env) {
+         size_t val = atoi(max_wr_env);
