@@ -201,3 +201,18 @@ Multi-turn conversation tested with DeepSeek-V3 through Dynamo SGLang pipeline.
 **Key insight**: Even without explicit KVBM offload enabled, the 1.24x multi-turn
 improvement is visible in the Dynamo SGLang pipeline on MI355X. This confirms that
 KV cache reuse benefits are real and measurable on AMD hardware.
+
+## CUDA Graph Fix — 3.2x TTFT Improvement
+
+**Root cause**: `SGLANG_AITER_MLA_PERSIST=True` (default) crashes during CUDA graph capture with MLA models (DeepSeek-V3/R1).
+**Fix**: `SGLANG_AITER_MLA_PERSIST=False` disables the persistent MLA kernel but keeps CUDA graphs enabled.
+
+### DSV3 (671B) with vs without CUDA Graphs
+
+| Config | TTFT P50 | Throughput | Token/s | CUDA Graph |
+|---|---|---|---|---|
+| Without CUDA graph | 7,544 ms | 0.4 req/s | 51 | Disabled |
+| **With CUDA graph (fixed)** | **2,328 ms** | **1.6 req/s** | **207** | **Enabled** |
+| **Improvement** | **3.2x** | **4x** | **4x** | |
+
+This is production-level performance — comparable to the throughput expected from 8x MI355X with DeepSeek-V3.
