@@ -40,10 +40,16 @@ except ImportError as e:
 try:
     import nixl._api as nixl_api
     import nixl._bindings as nixl_bindings
-except ImportError as e:
-    raise ImportError(
-        "NIXL Python bindings must be installed to use this module. Please install NIXL, ex: 'pip install nixl'."
-    ) from e
+
+    _HAS_NIXL = True
+except ImportError:
+    nixl_api = None
+    nixl_bindings = None
+    _HAS_NIXL = False
+    logging.warning(
+        "nixl/rixl not available — nixl_connect features disabled. "
+        "Install nixl or rixl matching your Python version for NIXL support."
+    )
 
 logger = logging.getLogger(__name__)
 
