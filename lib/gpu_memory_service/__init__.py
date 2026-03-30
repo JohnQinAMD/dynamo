@@ -23,17 +23,24 @@ Server API:
     from gpu_memory_service.server import GMSRPCServer
 """
 
-# Primary client exports
-from gpu_memory_service.client.memory_manager import (
-    GMSClientMemoryManager,
-    StaleMemoryLayoutError,
-)
+# Primary client exports — lazy import for ROCm compatibility
+try:
+    from gpu_memory_service.client.memory_manager import (
+        GMSClientMemoryManager,
+        StaleMemoryLayoutError,
+    )
 
-# PyTorch integration (GMS client memory manager)
-from gpu_memory_service.client.torch.allocator import (
-    get_gms_client_memory_manager,
-    get_or_create_gms_client_memory_manager,
-)
+    # PyTorch integration (GMS client memory manager)
+    from gpu_memory_service.client.torch.allocator import (
+        get_gms_client_memory_manager,
+        get_or_create_gms_client_memory_manager,
+    )
+except ImportError:
+    # On ROCm without cuda.bindings, defer until actually used
+    GMSClientMemoryManager = None  # type: ignore[assignment,misc]
+    StaleMemoryLayoutError = None  # type: ignore[assignment,misc]
+    get_gms_client_memory_manager = None  # type: ignore[assignment]
+    get_or_create_gms_client_memory_manager = None  # type: ignore[assignment]
 
 __all__ = [
     # Client

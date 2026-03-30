@@ -34,25 +34,45 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from gpu_memory_service.client.cuda_vmm_utils import free_va as _cuda_free_va
-from gpu_memory_service.client.cuda_vmm_utils import (
-    import_handle_from_fd,
-    map_to_va,
-    release_handle,
-)
-from gpu_memory_service.client.cuda_vmm_utils import reserve_va as _cuda_reserve_va
-from gpu_memory_service.client.cuda_vmm_utils import (
-    set_access,
-    set_current_device,
-    synchronize,
-    unmap,
-    validate_pointer,
-)
+try:
+    from gpu_memory_service.client.vmm_utils import (
+        free_va as _gpu_free_va,
+        import_handle_from_fd,
+        map_to_va,
+        release_handle,
+        reserve_va as _gpu_reserve_va,
+        set_access,
+        set_current_device,
+        synchronize,
+        unmap,
+        validate_pointer,
+    )
+    from gpu_memory_service.common.vmm_utils import (
+        align_to_granularity,
+        get_allocation_granularity,
+    )
+except ImportError:
+    from gpu_memory_service.client.cuda_vmm_utils import free_va as _gpu_free_va
+    from gpu_memory_service.client.cuda_vmm_utils import (
+        import_handle_from_fd,
+        map_to_va,
+        release_handle,
+    )
+    from gpu_memory_service.client.cuda_vmm_utils import reserve_va as _gpu_reserve_va
+    from gpu_memory_service.client.cuda_vmm_utils import (
+        set_access,
+        set_current_device,
+        synchronize,
+        unmap,
+        validate_pointer,
+    )
+    from gpu_memory_service.common.cuda_vmm_utils import (
+        align_to_granularity,
+        get_allocation_granularity,
+    )
+_cuda_free_va = _gpu_free_va
+_cuda_reserve_va = _gpu_reserve_va
 from gpu_memory_service.client.rpc import GMSRPCClient
-from gpu_memory_service.common.cuda_vmm_utils import (
-    align_to_granularity,
-    get_allocation_granularity,
-)
 from gpu_memory_service.common.types import GrantedLockType, RequestedLockType
 
 logger = logging.getLogger(__name__)

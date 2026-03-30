@@ -49,8 +49,24 @@ except ImportError:
 
         BACKEND = "cuda"
 
-    except ImportError as exc:
-        raise ImportError(
-            "Neither HIP (hip python package) nor CUDA (cuda-python bindings) "
-            "is available. Install one of them to use GPU Memory Service."
-        ) from exc
+    except ImportError:
+        import warnings
+        warnings.warn(
+            "Neither HIP nor CUDA Python bindings available. "
+            "GPU Memory Service VMM operations will not be functional.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        BACKEND = "none"
+
+        def check_result(*args, **kwargs):
+            raise RuntimeError("No GPU VMM backend available")
+
+        def ensure_initialized():
+            raise RuntimeError("No GPU VMM backend available")
+
+        def get_allocation_granularity(device: int) -> int:
+            raise RuntimeError("No GPU VMM backend available")
+
+        def align_to_granularity(size: int, granularity: int) -> int:
+            return ((size + granularity - 1) // granularity) * granularity
