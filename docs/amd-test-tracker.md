@@ -133,3 +133,13 @@
    - **Recommended fix for DSV3**: Configure ionic backend network (IPv4 + MTU 9000 + QoS), then use `--disaggregation-transfer-backend mori`
    - DRAM-to-DRAM RIXL transfer verified at 39.4 GB/s
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
+
+### DSV3 MoRI RDMA Disagg — FINAL RESULTS (matched ionic subnets + QoS)
+
+| Concurrency | TTFT P50 | req/s | tok/s | ok rate |
+|-------------|----------|-------|-------|---------|
+| c=1 | 515 ms | 1.8 | 118 | 100% |
+| c=4 | 1,259 ms | 3.7 | 235 | 100% |
+| **c=8** | **1,025 ms** | **7.4** | **475** | **100%** |
+
+**Key fixes applied**: (1) Match ionic subnets (ionic_0↔ionic_1), (2) Install libionic1 ABI fix, (3) QoS/DCQCN per ROCm docs, (4) Use `--disaggregation-transfer-backend mori`
