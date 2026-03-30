@@ -53,7 +53,7 @@
 | Disagg architecture (Qwen-0.5B) | **DONE** | Pipeline works end-to-end |
 | **Disagg cross-node (Qwen, TCP)** | **DONE** | **76.2 req/s at c=8, P50=91ms** |
 | Disagg DSV3 routing | **DONE** | Both workers register, requests route |
-| Disagg DSV3 mooncake (TCP) | **BLOCKED** | KV cache too large for mooncake TCP |
+| Disagg DSV3 TCP (256mb segment) | **BLOCKED** | Decode crashes on large KV transfer |
 | Disagg DSV3 nixl/RIXL backend | **BLOCKED** | VRAM registration fails (no GDR for ionic+AMD) |
 | Disagg DSV3 1-node (2xTP4) | **BLOCKED** | OOM: 2x DSV3 TP=4 exceeds node memory |
 | RIXL 2-node DRAM transfer | **DONE** | 39.4 GB/s (79% of 400Gb/s) |
@@ -120,7 +120,7 @@
    - **Single-node 2xTP4**: GPU OOM even at mem_fraction=0.30 (DSV3+mooncake+CUDA graphs exceed 4-GPU capacity)
    - **Sequential load**: Same OOM — DSV3 TP=4 leaves <30% GPU memory, below KV cache minimum
    - **Cross-node Qwen TCP disagg WORKS**: 76.2 req/s, P50=91ms (proven on 2 node pairs)
-   - **DSV3 TCP disagg fails**: KV cache too large for mooncake TCP buffer management
-   - **Root cause for DSV3**: (1) mooncake TCP can't handle large KV transfers, (2) TP=4 OOM. Needs RDMA or optimized TCP for large models.
+   - **DSV3 TCP disagg (256mb segment)**: Prefill processes, decode crashes ("FATAL: exception not rethrown") during KV receive
+   - **Root cause for DSV3**: mooncake TCP crashes on large model KV operations on AMD GPUs. Works for small models. Needs RDMA or mooncake AMD patch for large models.
    - DRAM-to-DRAM RIXL transfer verified at 39.4 GB/s
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
