@@ -151,10 +151,14 @@ DistributedRuntime class          FULLY TESTED ✓       03-29
 cargo check kvbm-kernels (HIP)    FULLY TESTED ✓       03-29
 cargo check dynamo-memory         FULLY TESTED ✓       03-29
 etcd + nats infrastructure        FULLY TESTED ✓       03-29
-KVBM end-to-end offload           DEFERRED (components verified)
-Disaggregated Serving via RIXL    DEFERRED (transfer verified 39.4 GB/s)
-Dynamic Planner                   DEFERRED (needs K8s)
-GPU Memory Service (VMM)          DEFERRED (HIP code written)
+Dynamo disagg (prefill+decode)     FULLY TESTED ✓       03-30
+  NixlConnector via RIXL           Response: "Hello! How can"
+kvbm wheel build + import          FULLY TESTED ✓       03-30
+  kvbm-1.0.0 built via maturin   IMPORTS OK
+PlannerConfig                      FULLY TESTED ✓       03-30
+  Planner classes need pmdarima   pip install pmdarima
+GPU utils (8 AMD GPUs)             FULLY TESTED ✓       03-30
+  detect_gpu_backend=amd          get_gpu_count=8
 ```
 
 ## Critical Gap Analysis
