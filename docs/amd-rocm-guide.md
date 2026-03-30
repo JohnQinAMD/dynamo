@@ -304,9 +304,25 @@ dynamo/
 
 ---
 
+## 8. vLLM Backend (Known Limitation)
+
+The `dynamo.vllm` Python code works correctly (imports OK, lazy nixl handling). However, running vLLM on AMD GPUs requires the [ROCm vLLM container](https://hub.docker.com/r/vllm/vllm-openai-rocm/tags) which uses **Python 3.12**, while Dynamo's Rust bindings (`maturin`) require **Python 3.10** (matching the SGLang container).
+
+| Container | Python | vLLM | Dynamo |
+|-----------|--------|------|--------|
+| `rocm/sgl-dev:...-mori-...` | 3.10 | ❌ | ✅ |
+| `vllm/vllm-openai-rocm:latest` | 3.12 | ✅ | ❌ (maturin OOM) |
+| `pip install vllm` in SGLang | 3.10 | ❌ (no `_rocm_C`) | ✅ |
+
+**To unblock**: Build Dynamo maturin wheel for Python 3.12, or build a custom container with vLLM ROCm + Python 3.10.
+
+---
+
 ## References
 
 - [ROCm SGLang + MoRI distributed](https://rocm.docs.amd.com/en/latest/how-to/rocm-for-ai/inference/benchmark-docker/sglang-mori-distributed.html)
 - [ROCm SGLang + Mooncake distributed](https://rocm.docs.amd.com/en/latest/how-to/rocm-for-ai/inference/benchmark-docker/sglang-distributed.html)
+- [ROCm vLLM inference](https://rocm.docs.amd.com/en/latest/how-to/rocm-for-ai/inference/benchmark-docker/vllm.html)
+- [vLLM ROCm Docker image](https://hub.docker.com/r/vllm/vllm-openai-rocm/tags)
 - [AMD Instinct MI355X System Acceptance](https://instinct.docs.amd.com/projects/system-acceptance/en/latest/gpus/mi355x.html)
 - [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo)

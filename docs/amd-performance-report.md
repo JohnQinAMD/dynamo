@@ -218,8 +218,8 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | ~~DSV3 disagg reliability~~ | — | **DONE** (7.4 req/s, 100% ok) |
 | ~~SGLang FPM relay~~ | — | **DONE** (3/3 tests passed) |
 | ~~K8s CRDs + infra~~ | — | **DONE** (7 CRDs, etcd, NATS deployed) |
-| K8s Planner integration test | Low | Planner runs in virtual mode; needs E2E K8s test |
-| vLLM backend integration | Medium | vLLM ROCm + Dynamo frontend |
+| ~~K8s Planner E2E~~ | — | **DONE** (PlannerConfig test passed on K8s chi2883) |
+| vLLM backend integration | Medium | Python 3.12 vs 3.10 gap (ROCm vLLM containers use 3.12, Dynamo needs 3.10) |
 
 ---
 
@@ -243,7 +243,9 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | 14 | Standalone verify (2 runs) | 1 | Consistent peak 17+ req/s at c=16 |
 | 15 | Planner unit tests | 1 | **8/8 PASSED**, virtual mode config OK |
 | 16 | SGLang FPM relay | 1 | **3/3 tests PASSED**, live worker verified |
+| 17 | **K8s Planner E2E** | K8s | **PASSED** on K8s cluster (chi2883) |
+| 18 | vLLM backend import | 1 | `dynamo.vllm` import OK; blocked by Python 3.12 gap |
 
 ---
 
-*Report generated from 16 completed tests across 6 MI355X nodes. All results verified with multiple runs. Code committed to `amd-additive` branch.*
+*Report generated from 18 tests across 6 MI355X nodes + K8s cluster. Code committed to `amd-additive` branch.*
