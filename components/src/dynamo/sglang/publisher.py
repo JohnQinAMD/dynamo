@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -93,6 +94,7 @@ class DynamoSglangPublisher:
 
         self._running = True
         self.kv_publishers: List[KvEventPublisher] = []
+        self.fpm_relay = None  # Set by init_fpm_relay() if FPM is enabled
 
         # ZMQ setup for receiving scheduler metrics (leader node only)
         # Non-leader nodes don't receive scheduler metrics via this socket - they only
@@ -141,6 +143,9 @@ class DynamoSglangPublisher:
                 )
                 active_decode_blocks = kv_metrics.kv_active_blocks
                 self.metrics_publisher.publish(dp_rank, active_decode_blocks)
+
+                if self.fpm_relay is not None:
+                    self.fpm_relay.on_kv_metrics(kv_metrics)
                 dp_rank_str = str(dp_rank)
                 # Publish total blocks (always available in KvMetrics)
                 self.component_gauges.set_total_blocks(
@@ -173,7 +178,12 @@ class DynamoSglangPublisher:
             except Exception as e:
                 logging.warning(f"Failed to terminate ZMQ context: {e}")
 
-        # Shutdown kv publishers
+        if self.fpm_relay is not None:
+            try:
+                self.fpm_relay.shutdown()
+            except Exception as e:
+                logging.warning(f"Failed to shutdown FPM relay: {e}")
+
         for publisher in self.kv_publishers:
             try:
                 publisher.shutdown()
@@ -181,6 +191,25 @@ class DynamoSglangPublisher:
                 logging.warning(f"Failed to shutdown kv publisher: {e}")
 
         logging.info("DynamoSglangPublisher cleanup complete")
+
+    def init_fpm_relay(self, worker_id: str) -> None:
+        """Initialize Forward Pass Metrics relay for the Dynamic Planner.
+
+        Converts SGLang KvMetrics to ForwardPassMetrics and publishes via ZMQ PUB.
+        The FpmEventRelay (Rust bridge) subscribes and forwards to the event plane.
+
+        Enable by setting DYN_FORWARDPASS_METRIC_PORT env var.
+        """
+        from dynamo.sglang.fpm_relay import ENV_FPM_PORT, SglangFpmRelay
+
+        if not os.environ.get(ENV_FPM_PORT):
+            return
+
+        self.fpm_relay = SglangFpmRelay(
+            worker_id=worker_id,
+            dp_rank=self.dp_rank,
+        )
+        logging.info("SGLang FPM relay initialized for planner load-based scaling")
 
     def init_engine_metrics_publish(self) -> None:
         """Publish initial dummy metrics to bootstrap the metrics endpoint."""
@@ -376,6 +405,7 @@ async def setup_sgl_metrics(
 
     publisher.init_engine_metrics_publish()
     publisher.init_kv_event_publish()
+    publisher.init_fpm_relay(worker_id=str(generate_endpoint.lease_id()))
 
     task = asyncio.create_task(publisher.run())
     logging.info("SGLang metrics loop started")
