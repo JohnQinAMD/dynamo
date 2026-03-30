@@ -22,6 +22,10 @@ We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four c
 
 ---
 
+**[View Interactive Performance Charts](https://htmlpreview.github.io/?https://github.com/JohnQinAMD/dynamo/blob/amd-additive/docs/amd-performance-plots.html)**
+
+---
+
 ## 1. KV-Cache-Aware Routing
 
 ### Headline: 4.35x TTFT improvement and 100% reliability at c=32
