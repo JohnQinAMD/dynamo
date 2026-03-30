@@ -272,7 +272,7 @@ KVBM provides 2.17-3.34x multi-turn TTFT improvement on AMD. These tests need HI
 
 | Blocker | Impact | Tests Blocked | Unblock Path |
 |---------|--------|---------------|-------------|
-| **vLLM Python 3.12 vs 3.10** | All vLLM backend tests | 14 | Build maturin wheel for Py3.12, or custom Py3.10 vLLM container |
+| ~~vLLM Python 3.12 vs 3.10~~ | ~~All vLLM backend tests~~ | ~~14~~ | **RESOLVED** — abi3-py310 wheel works on 3.12; verified with `maturin develop` in `rocm/vllm:latest` (175 tests pass) |
 | **TRT-LLM NVIDIA-only** | All TRT-LLM tests | 6 | N/A — skip permanently with `@pytest.mark.skip(reason="TRT-LLM NVIDIA-only")` |
 | ~~NIXL/RIXL VRAM registration~~ | ~~RIXL-based disagg~~ | ~~2~~ | **FIXED** — DRAM staging monkey-patch (`nixl_rocm_staging.py`) |
 | **HIP KVBM kernel linkage** | KVBM integration tests | 6 | Complete `cargo build --features block-manager-rocm` pipeline |
@@ -339,7 +339,6 @@ tests:
 ```
 
 ### Tier 2: Post-merge (nightly, ~30 min)
-
 ```yaml
 runs-on: [self-hosted, rocm, mi355x]
 tests:

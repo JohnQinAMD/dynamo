@@ -56,17 +56,40 @@ jobs:
           fi
 
   rocm-gpu-test:
-    name: ROCm GPU Test
+    name: ROCm GPU Test (Python ${{ matrix.python }})
     runs-on: [self-hosted, rocm, mi355x]
     if: github.event_name == 'push'
+    strategy:
+      matrix:
+        include:
+          - python: "3.10"
+            image: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+          - python: "3.12"
+            image: rocm/vllm:latest
     container:
-      image: rocm/pytorch:latest
+      image: ${{ matrix.image }}
       options: --device=/dev/kfd --device=/dev/dri --group-add video
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify Python version
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 10), 'Python >= 3.10 required'"
+
       - name: GPU Detection
         run: rocm-smi --showproductname | head -5
+
+      - name: Build Dynamo (abi3)
+        run: |
+          MODE=develop bash scripts/build_dynamo_wheel.sh
+
+      - name: Verify dynamo.llm import
+        run: |
+          python3 -c "
+          from dynamo.llm import ModelType, MockEngineArgs
+          print(f'dynamo.llm: OK (Python {__import__(\"sys\").version})')
+          "
 
       - name: Compile HIP Kernel
         run: |

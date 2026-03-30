@@ -318,17 +318,22 @@ dynamo/
 
 ---
 
-## 8. vLLM Backend (Known Limitation)
+## 8. Python Version Compatibility
 
-The `dynamo.vllm` Python code works correctly (imports OK, lazy nixl handling). However, running vLLM on AMD GPUs requires the [ROCm vLLM container](https://hub.docker.com/r/vllm/vllm-openai-rocm/tags) which uses **Python 3.12**, while Dynamo's Rust bindings (`maturin`) require **Python 3.10** (matching the SGLang container).
+Dynamo supports **Python 3.10, 3.11, and 3.12** via the PyO3 stable ABI (`abi3-py310`). A single Rust wheel works on all versions >= 3.10.
 
-| Container | Python | vLLM | Dynamo |
-|-----------|--------|------|--------|
-| `rocm/sgl-dev:...-mori-...` | 3.10 | ❌ | ✅ |
-| `vllm/vllm-openai-rocm:latest` | 3.12 | ✅ | ❌ (maturin OOM) |
-| `pip install vllm` in SGLang | 3.10 | ❌ (no `_rocm_C`) | ✅ |
+| Container | Python | vLLM | Dynamo | Notes |
+|-----------|--------|------|--------|-------|
+| `rocm/sgl-dev:...-mori-...` | 3.10 | ❌ | ✅ | Has Rust pre-installed |
+| `rocm/vllm:latest` | 3.12 | ✅ | ✅ | Run `build_dynamo_wheel.sh` |
+| `rocm/pytorch:latest` | 3.10 | ❌ | ✅ | General purpose |
 
-**To unblock**: Build Dynamo maturin wheel for Python 3.12, or build a custom container with vLLM ROCm + Python 3.10.
+**Verified**: `maturin develop --release` builds and passes 175 tests on Python 3.12 (`rocm/vllm:latest` on MI355X).
+
+```bash
+# Build Dynamo in any Python >= 3.10 container:
+MODE=develop bash scripts/build_dynamo_wheel.sh
+```
 
 ---
 

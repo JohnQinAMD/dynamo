@@ -230,7 +230,8 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | ~~K8s Planner E2E~~ | — | **DONE** (PlannerConfig test passed on K8s chi2883) |
 | ~~RIXL DRAM staging~~ | — | **DONE** (monkey-patch, 12/12 tests passed on MI355X) |
 | ~~Mooncake ROCm patch~~ | — | **DONE** (compiled OK, GPU/CPU detection + ionic max_sge) |
-| vLLM backend integration | Medium | Python 3.12 vs 3.10 gap (ROCm vLLM containers use 3.12, Dynamo needs 3.10) |
+| ~~vLLM Python 3.12 gap~~ | — | **RESOLVED** — abi3 wheel verified on Python 3.12 (175/175 pass on `rocm/vllm:latest`) |
+| vLLM backend integration | Low | vLLM ROCm import works; needs end-to-end serve test on ROCm |
 
 ---
 
