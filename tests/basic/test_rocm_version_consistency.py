@@ -6,13 +6,19 @@
 Counterpart to test_cuda_version_consistency.py for AMD ROCm environments.
 Verifies that all ROCm components (hipcc, PyTorch, pip packages) use the
 same major ROCm version to avoid ABI mismatches.
+
+Skipped on NVIDIA/CUDA systems.
 """
 
 import os
 import re
+import shutil
 import subprocess
 
 import pytest
+
+if not os.path.exists("/opt/rocm") and not shutil.which("rocm-smi"):
+    pytest.skip("ROCm version tests require /opt/rocm", allow_module_level=True)
 
 pytestmark = [
     pytest.mark.rocm,

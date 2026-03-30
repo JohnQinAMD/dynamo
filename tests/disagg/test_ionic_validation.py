@@ -10,13 +10,21 @@ Before running MoRI RDMA disaggregated inference, we need to verify:
 
 These tests can run on a single node to validate the NIC stack. Multi-node
 subnet matching requires manual verification or a multi-node CI fixture.
+
+Skipped entirely on NVIDIA/CUDA systems (no ionic hardware).
 """
 
 import os
 import re
 import subprocess
 
+import torch
 import pytest
+
+_is_hip = hasattr(torch.version, "hip") and torch.version.hip is not None
+
+if not _is_hip:
+    pytest.skip("ionic/MoRI tests require AMD ROCm (HIP)", allow_module_level=True)
 
 pytestmark = [
     pytest.mark.rocm,

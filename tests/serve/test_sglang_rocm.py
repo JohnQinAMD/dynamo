@@ -7,8 +7,7 @@ These tests use the ROCm launch scripts (examples/backends/sglang/launch/rocm/)
 which include AMD-specific settings: HIP_VISIBLE_DEVICES, VLLM_ROCM_USE_AITER,
 --page-size 16, etc.
 
-Counterpart to test_sglang.py for AMD GPUs. Tests are skipped on NVIDIA systems
-and when SGLang is not installed.
+Counterpart to test_sglang.py for AMD GPUs. Skipped on NVIDIA/CUDA systems.
 """
 
 import dataclasses
@@ -17,6 +16,9 @@ import os
 from dataclasses import dataclass, field
 
 import pytest
+
+if not os.path.exists("/opt/rocm"):
+    pytest.skip("ROCm serve tests require /opt/rocm", allow_module_level=True)
 
 from tests.serve.common import (
     WORKSPACE_DIR,

@@ -7,6 +7,8 @@ Verifies that AMD GPU hardware is visible, HIP kernels compile, RIXL
 libraries are installed, and the Dynamo gpu_utils module correctly
 detects the AMD backend. These tests are the foundation for all other
 ROCm tests — if they fail, nothing else will work.
+
+Skipped on NVIDIA/CUDA systems.
 """
 
 import os
@@ -14,6 +16,10 @@ import shutil
 import subprocess
 
 import pytest
+
+_is_rocm = os.path.exists("/opt/rocm") or shutil.which("rocm-smi") is not None
+if not _is_rocm:
+    pytest.skip("ROCm tests require /opt/rocm or rocm-smi", allow_module_level=True)
 
 pytestmark = [
     pytest.mark.rocm,

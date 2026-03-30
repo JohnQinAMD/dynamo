@@ -15,6 +15,8 @@ Requirements:
 These are multi-node tests — they require the DISAGG_PREFILL_HOST and
 DISAGG_DECODE_HOST environment variables to specify the node addresses,
 or they will be skipped.
+
+Skipped entirely on NVIDIA/CUDA systems.
 """
 
 import json
@@ -23,6 +25,16 @@ import subprocess
 import time
 
 import pytest
+
+try:
+    import torch
+
+    _is_hip = hasattr(torch.version, "hip") and torch.version.hip is not None
+except ImportError:
+    _is_hip = os.path.exists("/opt/rocm")
+
+if not _is_hip:
+    pytest.skip("MoRI RDMA tests require AMD ROCm (HIP)", allow_module_level=True)
 
 pytestmark = [
     pytest.mark.rocm,

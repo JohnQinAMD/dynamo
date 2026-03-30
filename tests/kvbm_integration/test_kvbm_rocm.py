@@ -13,6 +13,8 @@ Prerequisites:
 - HIP KVBM kernels compiled (tensor_kernels.hip → libkvbm_kernels.so)
 - SGLang installed with aiter support
 - AMD GPU with ROCm
+
+Skipped on NVIDIA/CUDA systems.
 """
 
 import json
@@ -22,6 +24,9 @@ import time
 import urllib.request
 
 import pytest
+
+if not os.path.exists("/opt/rocm"):
+    pytest.skip("KVBM ROCm tests require /opt/rocm", allow_module_level=True)
 
 pytestmark = [
     pytest.mark.kvbm,
