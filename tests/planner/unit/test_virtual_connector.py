@@ -19,6 +19,7 @@ pytestmark = [
     pytest.mark.unit,
     pytest.mark.planner,
     pytest.mark.sglang,
+    pytest.mark.rocm,
 ]
 logger = logging.getLogger(__name__)
 

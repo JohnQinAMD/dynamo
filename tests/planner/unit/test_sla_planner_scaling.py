@@ -23,6 +23,7 @@ pytestmark = [
     pytest.mark.unit,
     pytest.mark.planner,
     pytest.mark.vllm,
+    pytest.mark.rocm,
 ]
 
 

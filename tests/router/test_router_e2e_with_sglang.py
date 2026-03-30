@@ -31,6 +31,7 @@ pytestmark = [
     pytest.mark.router,
     pytest.mark.sglang,
     pytest.mark.model(MODEL_NAME),
+    pytest.mark.rocm,
 ]
 PAGE_SIZE = 16  # SGLang uses "page_size" instead of "block_size"
 

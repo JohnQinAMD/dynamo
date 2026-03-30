@@ -317,6 +317,16 @@ def _item_has_marker(item, marker_name):
     return False
 
 
+def _is_rocm_environment() -> bool:
+    """Return True if running on an AMD ROCm system."""
+    return os.path.exists("/opt/rocm") or shutil.which("rocm-smi") is not None
+
+
+def _is_nvidia_environment() -> bool:
+    """Return True if running on an NVIDIA CUDA system."""
+    return shutil.which("nvidia-smi") is not None
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     """
@@ -336,6 +346,24 @@ def pytest_collection_modifyitems(config, items):
             for item in items:
                 if _item_has_marker(item, marker_name):
                     item.add_marker(skip)
+
+    # Auto-skip ROCm-only tests on NVIDIA systems and vice versa
+    is_rocm = _is_rocm_environment()
+    is_nvidia = _is_nvidia_environment()
+    if is_nvidia and not is_rocm:
+        skip_rocm = pytest.mark.skip(reason="ROCm-only test on NVIDIA system")
+        for item in items:
+            if _item_has_marker(item, "rocm") and not _item_has_marker(item, "h100"):
+                item.add_marker(skip_rocm)
+    if is_rocm and not is_nvidia:
+        skip_nvidia = pytest.mark.skip(reason="NVIDIA-only test on ROCm system")
+        for item in items:
+            if _item_has_marker(item, "h100"):
+                item.add_marker(skip_nvidia)
+            if _item_has_marker(item, "trtllm"):
+                item.add_marker(
+                    pytest.mark.skip(reason="TRT-LLM is NVIDIA-only")
+                )
 
     # Skip tests that exceed --max-vram-gib
     vram_limit = config.getoption("--max-vram-gib", default=None)

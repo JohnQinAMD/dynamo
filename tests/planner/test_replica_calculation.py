@@ -23,7 +23,7 @@ from dynamo.planner.core.state import PlannerSharedState
 from dynamo.planner.monitoring.traffic_metrics import Metrics
 from dynamo.planner.monitoring.worker_info import WorkerInfo
 
-pytestmark = [pytest.mark.pre_merge, pytest.mark.gpu_0]
+pytestmark = [pytest.mark.pre_merge, pytest.mark.gpu_0, pytest.mark.rocm]
 
 
 class PlannerHarness:
