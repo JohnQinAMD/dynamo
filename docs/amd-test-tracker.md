@@ -113,14 +113,17 @@
 
 ## Remaining
 
-1. **Disagg KV transfer**: Exhaustively tested 4 approaches:
+1. **Disagg KV transfer**: Tested 7 approaches across 3 backends:
    - **Mooncake RDMA**: ibv_reg_mr ENOMEM (ionic lacks AMD GPU Direct RDMA)
    - **Mooncake TCP** (patched `"rdma"→"tcp"`): Init OK, KV data transfer still fails internally
    - **RIXL/nixl backend**: `register_memory("VRAM")` → NIXL_ERR_BACKEND
    - **Single-node 2xTP4**: GPU OOM even at mem_fraction=0.30 (DSV3+mooncake+CUDA graphs exceed 4-GPU capacity)
    - **Sequential load**: Same OOM — DSV3 TP=4 leaves <30% GPU memory, below KV cache minimum
    - **Cross-node Qwen TCP disagg WORKS**: 76.2 req/s, P50=91ms (proven on 2 node pairs)
-   - **DSV3 TCP disagg (256mb segment)**: Prefill processes, decode crashes ("FATAL: exception not rethrown") during KV receive
-   - **Root cause for DSV3**: mooncake TCP crashes on large model KV operations on AMD GPUs. Works for small models. Needs RDMA or mooncake AMD patch for large models.
+   - **DSV3 TCP disagg (256mb segment)**: Prefill processes, decode crashes during KV receive
+   - **MoRI backend** (`--disaggregation-transfer-backend mori`): EOFError — ionic NICs need backend IPv4 network config (per ROCm docs: benic* interfaces + 192.168.x.x subnets + QoS/DCQCN)
+   - **RIXL DRAM staging** (patched "VRAM"→"DRAM"): Registration succeeds but transfer fails — GPU addresses registered as DRAM are invalid; needs actual host-pinned buffers + GPU↔CPU copies
+   - **Cross-node Qwen TCP disagg WORKS**: 76.2 req/s, P50=91ms (confirmed again)
+   - **Recommended fix for DSV3**: Configure ionic backend network (IPv4 + MTU 9000 + QoS), then use `--disaggregation-transfer-backend mori`
    - DRAM-to-DRAM RIXL transfer verified at 39.4 GB/s
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
