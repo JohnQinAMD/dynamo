@@ -9,21 +9,24 @@ ionic NICs (no GPU Direct RDMA support). The `ibv_reg_mr` call for
 VRAM addresses fails with NIXL_ERR_BACKEND.
 
 Solution: Allocate pinned host (DRAM) staging buffers, register those
-with RIXL, and do explicit GPU↔CPU copies around each transfer.
+with RIXL, and do explicit GPU<->CPU copies around each transfer.
 
 Data flow:
-  Prefill side:  GPU KV cache → hipMemcpy D2H → DRAM staging buffer
-                 → RIXL RDMA transfer → remote DRAM staging buffer
-  Decode side:   remote DRAM staging buffer → hipMemcpy H2D → GPU KV cache
+  Prefill side:  GPU KV cache -> hipMemcpy D2H -> DRAM staging buffer
+                 -> RIXL RDMA transfer -> remote DRAM staging buffer
+  Decode side:   remote DRAM staging buffer -> hipMemcpy H2D -> GPU KV cache
 
 Performance impact: ~1-2ms extra per transfer for hipMemcpy, but enables
 RIXL on AMD ionic NICs where VRAM registration fails.
 
-Usage: Wrap the SGLang nixl connector's register/transfer calls.
+The main integration is via monkey-patch in nixl_rocm_staging.py
+(patches NixlKVManager at runtime, zero changes to sglang-amd source).
+This module provides a standalone helper for use outside SGLang.
 """
 
 from __future__ import annotations
 
+import ctypes
 import logging
 from typing import List, Optional, Tuple
 
@@ -34,17 +37,46 @@ try:
 except ImportError:
     torch = None
 
+# hipMemcpy direction constants
+_hipMemcpyHostToDevice = 1
+_hipMemcpyDeviceToHost = 2
+
+_libhip = None
+
+
+def _get_libhip():
+    global _libhip
+    if _libhip is None:
+        try:
+            _libhip = ctypes.CDLL("libamdhip64.so")
+        except OSError:
+            raise RuntimeError("libamdhip64.so not found — ROCm HIP runtime required")
+    return _libhip
+
+
+def _hip_memcpy(dst: int, src: int, size: int, kind: int):
+    lib = _get_libhip()
+    ret = lib.hipMemcpy(
+        ctypes.c_void_p(dst),
+        ctypes.c_void_p(src),
+        ctypes.c_size_t(size),
+        ctypes.c_int(kind),
+    )
+    if ret != 0:
+        raise RuntimeError(f"hipMemcpy failed with error code {ret}")
+
+
+def _hip_sync():
+    lib = _get_libhip()
+    ret = lib.hipDeviceSynchronize()
+    if ret != 0:
+        raise RuntimeError(f"hipDeviceSynchronize failed with error code {ret}")
+
 
 class DramStagingBuffer:
     """Manages pinned host memory for DRAM-staged RDMA transfers."""
 
     def __init__(self, size: int, device_id: int = 0):
-        """Allocate a pinned host buffer for staging.
-
-        Args:
-            size: Buffer size in bytes.
-            device_id: GPU device ID for hipMemcpy operations.
-        """
         self.size = size
         self.device_id = device_id
 
@@ -61,27 +93,21 @@ class DramStagingBuffer:
         )
 
     def copy_from_gpu(self, gpu_ptr: int, offset: int, length: int) -> None:
-        """Copy data from GPU VRAM to host staging buffer."""
-        gpu_tensor = torch.tensor([], dtype=torch.uint8)
-        gpu_storage = torch.UntypedStorage(length, device=f"cuda:{self.device_id}")
-        torch.cuda.current_stream().synchronize()
-        # Use low-level memcpy
-        import ctypes
-
-        ctypes.memmove(
+        """Copy data from GPU VRAM to host staging buffer (hipMemcpy D2H)."""
+        _hip_memcpy(
             self.host_ptr + offset,
             gpu_ptr,
             length,
+            _hipMemcpyDeviceToHost,
         )
 
     def copy_to_gpu(self, gpu_ptr: int, offset: int, length: int) -> None:
-        """Copy data from host staging buffer to GPU VRAM."""
-        import ctypes
-
-        ctypes.memmove(
+        """Copy data from host staging buffer to GPU VRAM (hipMemcpy H2D)."""
+        _hip_memcpy(
             gpu_ptr,
             self.host_ptr + offset,
             length,
+            _hipMemcpyHostToDevice,
         )
 
 
@@ -97,7 +123,6 @@ class DramStagingManager:
         self._total_allocated = 0
 
     def get_or_create_buffer(self, buffer_id: int, size: int) -> DramStagingBuffer:
-        """Get existing staging buffer or create a new one."""
         if buffer_id not in self.buffers:
             buf = DramStagingBuffer(size, self.gpu_id)
             self.buffers[buffer_id] = buf
@@ -115,12 +140,7 @@ class DramStagingManager:
     ) -> List[Tuple[int, int]]:
         """Stage GPU buffers to DRAM before RDMA transfer.
 
-        Args:
-            gpu_addrs: List of (gpu_ptr, size) pairs.
-            buffer_id: Staging buffer ID.
-
-        Returns:
-            List of (dram_ptr, size) pairs for RIXL registration.
+        Returns list of (dram_ptr, size) pairs for RIXL registration.
         """
         total_size = sum(size for _, size in gpu_addrs)
         buf = self.get_or_create_buffer(buffer_id, total_size)
@@ -132,6 +152,7 @@ class DramStagingManager:
             dram_addrs.append((buf.host_ptr + offset, size))
             offset += size
 
+        _hip_sync()
         return dram_addrs
 
     def unstage_dram_to_gpu(
@@ -139,12 +160,7 @@ class DramStagingManager:
         gpu_addrs: List[Tuple[int, int]],
         buffer_id: int,
     ) -> None:
-        """Copy received data from DRAM staging buffer back to GPU.
-
-        Args:
-            gpu_addrs: List of (gpu_ptr, size) pairs.
-            buffer_id: Staging buffer ID.
-        """
+        """Copy received data from DRAM staging buffer back to GPU."""
         buf = self.buffers.get(buffer_id)
         if buf is None:
             raise ValueError(f"No staging buffer for id={buffer_id}")
@@ -154,8 +170,9 @@ class DramStagingManager:
             buf.copy_to_gpu(gpu_ptr, offset, size)
             offset += size
 
+        _hip_sync()
+
     def cleanup(self) -> None:
-        """Release all staging buffers."""
         for buf in self.buffers.values():
             del buf.host_tensor
         self.buffers.clear()
