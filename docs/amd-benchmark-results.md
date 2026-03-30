@@ -71,3 +71,24 @@ Our 7B model benchmarks confirm:
 ## Key Takeaway
 
 > Dynamo on AMD MI355X is **functionally complete and operationally ready**. The performance benefits (3x TTFT, 12x multi-turn) are architectural advantages that manifest at scale with large models and high concurrency — not measurable with a 7B model at 8 concurrent requests. The infrastructure layer adds **<1% overhead**, confirming it's ready for production deployment with DeepSeek-R1 class models.
+
+## DeepSeek-V3 (671B MoE) on 8x MI355X
+
+**Model**: deepseek-ai/DeepSeek-V3 (671B, FP16+FP8 KV cache)
+**Config**: TP=8, aiter backend, chunked-prefill=32K, disable-cuda-graph, disable-radix-cache
+**Container**: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+**VRAM**: ~205GB/GPU (total 1.64TB for model + KV cache)
+
+| Concurrency | TTFT P50 (ms) | TTFT P99 (ms) | Throughput (req/s) | Token/s |
+|---|---|---|---|---|
+| 1 | 7,390 | 7,418 | 0.1 | 17 |
+| 4 | 7,403 | 9,760 | 0.5 | 65 |
+| 8 | 7,458 | 8,657 | 1.0 | 132 |
+| 16 | 7,390 | 9,515 | 2.0 | 255 |
+
+**Notes**:
+- CUDA graphs disabled due to MoE layer compatibility issue with this SGLang version
+- TTFT ~7.4s is the prefill time for 671B model (expected without CUDA graphs)
+- Throughput scales linearly with concurrency (good GPU utilization under load)
+- With CUDA graphs enabled (production), expect 2-5x improvement in TTFT and throughput
+- This baseline serves as the comparison point for Dynamo KV routing benefit at scale
