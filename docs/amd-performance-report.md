@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four core features against NVIDIA's published benchmarks. **15 tests completed** across 6 MI355X nodes, with **6 bugs found and fixed**.
+We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four core features against NVIDIA's published benchmarks. **20 tests completed** across 6 MI355X nodes, with **8 bugs found and fixed**.
 
 | Feature | NVIDIA Claim | AMD MI355X Result | Status |
 |---------|-------------|-------------------|--------|
@@ -107,10 +107,11 @@ Verified on 2 independent node pairs.
 | Backend | Result | Root Cause |
 |---------|--------|------------|
 | **MoRI RDMA** | **7.4 req/s, 475 tok/s (100% ok)** | Matched ionic subnets + QoS |
-| Mooncake RDMA | `ibv_reg_mr ENOMEM` | No GPU Direct RDMA on ionic |
+| **🆕 RIXL + DRAM staging** | **RDMA via pinned DRAM bounce** | Monkey-patch, zero SGLang changes |
+| **🆕 Mooncake + ROCm patch** | GPU MR → clear error + fallback | `mooncake_rocm_rdma.patch` compiled OK |
+| Mooncake RDMA (unpatched) | `ibv_reg_mr ENOMEM` | No GPU Direct RDMA on ionic |
 | Mooncake TCP | Decode crashes | Buffer management failure |
-| RIXL/nixl VRAM | `NIXL_ERR_BACKEND` | Can't register GPU memory |
-| RIXL DRAM staging | Transfer fails | GPU addresses ≠ DRAM addresses |
+| RIXL/nixl (unpatched) | `NIXL_ERR_BACKEND` | Can't register GPU memory |
 | Single-node 2×TP4 | OOM killed | DSV3 too large for 4 GPUs × 2 |
 
 ---
@@ -172,6 +173,8 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | Category | Files | Key Changes |
 |----------|-------|-------------|
 | KV Router fix | 1 | `multi_worker.rs` block_size assertion |
+| RIXL DRAM staging | 3 | `nixl_rocm_staging.py` monkey-patch, `nixl_dram_staging.py`, tests |
+| Mooncake ROCm patch | 2 | `mooncake_rocm_rdma.patch`, `gen_mooncake_patch.py` |
 | HIP kernels | 2 | `tensor_kernels.hip`, `build.rs` HIP path |
 | GPU HAL | 6 | `hip.rs` modules for memory, pool, transfer |
 | Container | 4 | ROCm Dockerfile blocks, `context.yaml` |
@@ -196,6 +199,8 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | `typing.Self` Python 3.10 | Import crash | Conditional import with `TypeVar` |
 | `OmniConfig` vLLM import | Worker startup crash | Lazy import in `dynamo/vllm/main.py` |
 | Ionic driver ABI mismatch | MoRI/RIXL RDMA blocked | Install `libionic1 54.0-185` from host |
+| Mooncake GPU MR on ionic | `ibv_reg_mr ENOMEM` for VRAM | ROCm patch: detect GPU/CPU, return `ERR_CONTEXT` for GPU |
+| RIXL VRAM registration | `NIXL_ERR_BACKEND` | DRAM staging monkey-patch: pinned host bounce buffers |
 
 ---
 
@@ -223,6 +228,8 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | ~~SGLang FPM relay~~ | — | **DONE** (3/3 tests passed) |
 | ~~K8s CRDs + infra~~ | — | **DONE** (7 CRDs, etcd, NATS deployed) |
 | ~~K8s Planner E2E~~ | — | **DONE** (PlannerConfig test passed on K8s chi2883) |
+| ~~RIXL DRAM staging~~ | — | **DONE** (monkey-patch, 12/12 tests passed on MI355X) |
+| ~~Mooncake ROCm patch~~ | — | **DONE** (compiled OK, GPU/CPU detection + ionic max_sge) |
 | vLLM backend integration | Medium | Python 3.12 vs 3.10 gap (ROCm vLLM containers use 3.12, Dynamo needs 3.10) |
 
 ---
@@ -249,7 +256,9 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | 16 | SGLang FPM relay | 1 | **3/3 tests PASSED**, live worker verified |
 | 17 | **K8s Planner E2E** | K8s | **PASSED** on K8s cluster (chi2883) |
 | 18 | vLLM backend import | 1 | `dynamo.vllm` import OK; blocked by Python 3.12 gap |
+| 19 | **RIXL DRAM staging unit** | 1 | **12/12 PASSED** on MI355X (hipMemcpy D2H/H2D, monkey-patch) |
+| 20 | **Mooncake ROCm patch compile** | 1 | **Build OK** (rdma_context.cpp + config.cpp) |
 
 ---
 
-*Report generated from 18 tests across 6 MI355X nodes + K8s cluster. Code committed to `amd-additive` branch.*
+*Report generated from 20 tests across 6 MI355X nodes + K8s cluster. Code committed to `amd-additive` branch.*

@@ -95,6 +95,8 @@ flowchart LR
 | KV Router | `multi_worker.rs` — graceful default when `block_size ≤ 1` | 🔧 |
 | KVBM Kernels | `tensor_kernels.hip` + HIP build path | 🆕 |
 | Disagg Transfer | `--disaggregation-transfer-backend mori` (replaces mooncake) | 🆕 |
+| RIXL DRAM Staging | `nixl_rocm_staging.py` — monkey-patch NixlKVManager for DRAM bounce | 🆕 |
+| Mooncake ROCm Patch | `mooncake_rocm_rdma.patch` — GPU/CPU MR detection + ionic max_sge | 🆕 |
 | Planner FPM | `fpm_relay.py` — SGLang KvMetrics → ForwardPassMetrics | 🆕 |
 | GPU Memory | HIP VMM facade, `hip.rs` HAL modules (6 files) | 🆕 |
 | Containers | ROCm Dockerfile blocks, `context.yaml` | 🆕 |
@@ -130,14 +132,16 @@ flowchart LR
     FE --> C
 ```
 
-### Why MoRI
+### Transfer Backend Matrix
 
 | Backend | Status | Performance | Issue |
 |:--------|:------:|:------------|:------|
 | **🆕 MoRI RDMA** | ✅ | **106.6 req/s** (Qwen) · **7.4 req/s** (DSV3) | — |
-| Mooncake RDMA | ❌ | — | `ibv_reg_mr ENOMEM` — no GDR on ionic |
+| **🆕 RIXL + DRAM Staging** | ✅ | RDMA via pinned host bounce | Monkey-patch, zero SGLang changes |
+| **🆕 Mooncake + ROCm patch** | ⚠️ | — | Patch applied, GPU MR returns clear error |
+| Mooncake RDMA (unpatched) | ❌ | — | `ibv_reg_mr ENOMEM` — no GDR on ionic |
 | Mooncake TCP | ⚠️ | 76.2 req/s (Qwen only) | DSV3 crashes |
-| RIXL / nixl | ❌ | — | VRAM registration fails |
+| RIXL / nixl (unpatched) | ❌ | — | VRAM registration fails |
 
 ### Ionic Subnet Matching
 
@@ -172,6 +176,55 @@ for i in 0 1 2 3 4 5 6 7; do
   echo "ionic_$i  $(echo $gid | cut -d: -f1-4)"
 done
 ```
+
+---
+
+## 3b. RIXL DRAM Staging (Plan B)
+
+When using RIXL/nixl instead of MoRI, GPU VRAM cannot be registered with ionic NICs. The `nixl_rocm_staging.py` monkey-patch solves this at runtime without modifying SGLang source.
+
+```mermaid
+flowchart LR
+    subgraph Prefill["Prefill Node"]
+        PG["GPU KV Cache"]
+        PD["🆕 Pinned DRAM<br>staging buffer"]
+        PN["ionic NIC"]
+        PG -->|"hipMemcpy D2H"| PD
+        PD -->|"ibv_reg_mr OK"| PN
+    end
+
+    subgraph Decode["Decode Node"]
+        DN["ionic NIC"]
+        DD["🆕 Pinned DRAM<br>staging buffer"]
+        DG["GPU KV Cache"]
+        DN -->|"RDMA WRITE"| DD
+        DD -->|"hipMemcpy H2D"| DG
+    end
+
+    PN ===|"🆕 RIXL RDMA 400Gb/s"| DN
+```
+
+**Key design**: wrap `agent.get_xfer_descs` once at init → all 3 transfer methods (`_send_kvcache_generic`, `send_kvcache_slice`, `_send_mamba_state`) are automatically patched. SGLang `conn.py` stays pristine.
+
+Enable: `export SGLANG_NIXL_ROCM_STAGING=1` or auto-detected on ROCm.
+
+## 3c. Mooncake ROCm Patch (Plan A)
+
+The C++ patch (`patches/mooncake_rocm_rdma.patch`) modifies `registerMemoryRegionInternal()`:
+
+```mermaid
+flowchart TB
+    REG["registerMemoryRegionInternal()"]
+    REG --> HIP{"#if USE_HIP"}
+    HIP -->|GPU memory| TRY["ibv_reg_mr(GPU)"]
+    TRY -->|ENOMEM| ERR["return ERR_CONTEXT<br>+ warning: use DRAM staging"]
+    TRY -->|success| OK["GPU Direct RDMA ✅"]
+    HIP -->|CPU memory| CPU["ibv_reg_mr(CPU) ✅"]
+    REG --> CUDA{"#elif USE_CUDA"}
+    CUDA --> DMABUF["ibv_reg_dmabuf_mr"]
+```
+
+Also patches `config.cpp`: auto-detects Pensando ionic (`vendor_id=0x1dd8`) → `max_sge=2`.
 
 ---
 

@@ -228,13 +228,16 @@ class TestMonkeyPatchIntegration(unittest.TestCase):
         mod._STAGING_ENABLED = True
         mod.patch_nixl_for_rocm()
 
-        # Verify the methods are our patched versions (not the originals)
-        self.assertIn(
-            "_rocm_staging",
-            NixlKVManager.__init__.__code__.co_varnames
-            if hasattr(NixlKVManager.__init__, "__code__")
-            else str(NixlKVManager.__init__),
-        )
+        # Verify register_buffer_to_engine was replaced
+        # (original has "VRAM" in source, patched doesn't)
+        import inspect
+        src = inspect.getsource(NixlKVManager.register_buffer_to_engine)
+        self.assertIn("DRAM", src)
+        self.assertNotIn('"VRAM"', src)
+
+        # Verify receiver poll was wrapped
+        poll_src = inspect.getsource(NixlKVReceiver.poll)
+        self.assertIn("_staging_kv_indices", poll_src)
 
 
 if __name__ == "__main__":
