@@ -216,3 +216,47 @@ KV cache reuse benefits are real and measurable on AMD hardware.
 | **Improvement** | **3.2x** | **4x** | **4x** | |
 
 This is production-level performance — comparable to the throughput expected from 8x MI355X with DeepSeek-V3.
+
+## Production-Scale Results WITH CUDA Graph Fix
+
+All benchmarks with `SGLANG_AITER_MLA_PERSIST=False` (CUDA graphs enabled).
+
+### DSV3 (671B) Concurrency Sweep — Single Node (8x MI355X)
+
+| Concurrency | TTFT P50 (ms) | Throughput (req/s) | Token/s |
+|---|---|---|---|
+| 1 | 937 | 1.0 | 132 |
+| 4 | 1,436 | 2.9 | 367 |
+| 8 | 1,306 | 4.7 | 602 |
+| 16 | 2,943 | 5.4 | **688** |
+| 32 | 8,350 | 3.8 | 481 |
+
+Peak throughput: **688 tok/s at c=16** (sweet spot before queue saturation).
+
+### Multi-turn Conversation (5 users x 5 turns)
+
+| Turn | TTFT Avg (ms) |
+|---|---|
+| Turn 0 (cold) | 566 |
+| Turn 1 | 347 |
+| Turn 2 | 323 |
+| Turn 3 | 757 |
+| Turn 4 | 346 |
+| **Improvement** | **1.64x** (Turn 0 vs Turn 4) |
+
+### 2-Node Round-Robin (chi2899 + chi2900)
+
+| Metric | Value |
+|---|---|
+| TTFT P50 | 1,182 ms |
+| Throughput | 5.1 req/s |
+| Token/s | 382 |
+
+### Before vs After CUDA Graph Fix
+
+| Metric | Before (no CG) | After (CG fixed) | Improvement |
+|---|---|---|---|
+| TTFT P50 (c=4) | 7,544 ms | 1,436 ms | **5.3x** |
+| Throughput (c=4) | 51 tok/s | 367 tok/s | **7.2x** |
+| Peak throughput | 255 tok/s (c=16) | 688 tok/s (c=16) | **2.7x** |
+| Multi-turn ratio | 1.24x | 1.64x | +32% |
