@@ -92,3 +92,25 @@ Our 7B model benchmarks confirm:
 - Throughput scales linearly with concurrency (good GPU utilization under load)
 - With CUDA graphs enabled (production), expect 2-5x improvement in TTFT and throughput
 - This baseline serves as the comparison point for Dynamo KV routing benefit at scale
+
+### DeepSeek-V3 Round-Robin 2-Node (chi2899 + chi2900)
+
+| Concurrency | TTFT P50 (ms) | TTFT P99 (ms) | Throughput | Token/s |
+|---|---|---|---|---|
+| 8 (2 nodes) | 8,239 | 11,016 | 0.8 req/s | 99 |
+
+This is the baseline for Dynamo KV routing comparison at production scale.
+With Dynamo KV-aware routing, requests sharing the same system prompt prefix
+would be routed to the same worker, avoiding redundant prefill computation.
+
+### Performance Summary: Dynamo Value Proposition on MI355X
+
+| Config | Model | TTFT P50 | Throughput | Notes |
+|---|---|---|---|---|
+| Standalone vLLM 1GPU | Qwen-7B | 312 ms | 12.0 req/s | Small model baseline |
+| Dynamo Agg 1GPU | Qwen-7B | 315 ms | 11.9 req/s | <1% overhead |
+| RR 2x vLLM | Qwen-7B | 325 ms | 24.6 req/s | Linear scaling |
+| Dynamo KV Router 2GPU | Qwen-7B | 324 ms | 23.5 req/s | Comparable (small model) |
+| Standalone 1-node | DSV3-671B | 7,390 ms | 0.1 req/s | 671B baseline |
+| Standalone c16 | DSV3-671B | 7,390 ms | 2.0 req/s | Linear w/ concurrency |
+| RR 2-node c8 | DSV3-671B | 8,239 ms | 0.8 req/s | 2-node baseline |
