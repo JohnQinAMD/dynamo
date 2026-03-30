@@ -115,7 +115,8 @@
    - **Mooncake RDMA**: ibv_reg_mr ENOMEM (ionic lacks AMD GPU Direct RDMA)
    - **Mooncake TCP** (patched `"rdma"→"tcp"`): Init OK, KV data transfer still fails internally
    - **RIXL/nixl backend**: `register_memory("VRAM")` → NIXL_ERR_BACKEND
-   - **Single-node 2xTP4**: OOM (2x DSV3 exceeds node memory)
-   - **Root cause**: mooncake library uses RDMA memory registration for GPU buffers even in TCP mode. Requires mooncake patch for AMD GPU support or custom CPU-staged transfer.
+   - **Single-node 2xTP4**: GPU OOM even at mem_fraction=0.30 (DSV3+mooncake+CUDA graphs exceed 4-GPU capacity)
+   - **Sequential load**: Same OOM — DSV3 TP=4 leaves <30% GPU memory, below KV cache minimum
+   - **Root cause**: (1) mooncake uses RDMA GPU mem registration even in TCP mode, (2) DSV3 TP=4 leaves no room for KV cache + mooncake buffers. Needs mooncake AMD GPU patch or TP=8 with working inter-node transfer.
    - DRAM-to-DRAM RIXL transfer verified at 39.4 GB/s
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
