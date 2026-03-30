@@ -54,7 +54,8 @@
 | **Disagg cross-node (Qwen, TCP)** | **DONE** | **76.2 req/s at c=8, P50=91ms** |
 | Disagg DSV3 routing | **DONE** | Both workers register, requests route |
 | Disagg DSV3 TCP (256mb segment) | **BLOCKED** | Decode crashes on large KV transfer |
-| **Disagg DSV3 MoRI RDMA** | **WORKING** | **DSV3 response generated! P50=512ms (3/6 ok at c=1)** |
+| **Disagg Qwen MoRI RDMA (matched subnet)** | **DONE** | **106.6 req/s at c=8, P50=68ms, 100% ok** |
+| Disagg DSV3 MoRI RDMA | WORKING | DSV3 response generated (3/6 ok at c=1) |
 | Disagg DSV3 nixl/RIXL backend | BLOCKED | VRAM registration fails (no GDR for ionic+AMD) |
 | Disagg DSV3 1-node (2xTP4) | BLOCKED | OOM: 2x DSV3 TP=4 exceeds node memory |
 | RIXL 2-node DRAM transfer | **DONE** | 39.4 GB/s (79% of 400Gb/s) |
