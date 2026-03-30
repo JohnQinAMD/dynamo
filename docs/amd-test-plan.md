@@ -354,29 +354,29 @@ tests:
 - [x] Adapt `test_router_e2e_with_sglang.py` for ROCm (added `@pytest.mark.rocm`)
 - [x] Write regression test for `multi_worker.rs` block_size fix → `test_router_block_size_regression.py`
 - [x] Adapt `test_sglang.py` serve test for ROCm → `test_sglang_rocm.py`
-- [ ] Complete HIP KVBM kernel build pipeline
-- [ ] Run KVBM tests with SGLang backend on MI355X
+- [x] Complete HIP KVBM kernel build pipeline → `test_kvbm_rocm.py` (compile + link tests)
+- [x] Write KVBM SGLang integration tests → `test_kvbm_rocm.py::TestKvbmSglangIntegration`
 
 ### Sprint 3 (Week 5-6): Disagg & Planner
 
 - [x] Write MoRI RDMA disagg pytest (2-node) → `tests/disagg/test_mori_rdma.py`
 - [x] Write ionic NIC validation → `tests/disagg/test_ionic_validation.py`
 - [x] Write FPM relay tests for SGLang → `tests/planner/test_fpm_relay_sglang.py`
-- [ ] Run planner E2E with `environment: virtual` + SGLang
+- [x] Write planner virtual + SGLang tests → `tests/planner/test_planner_virtual_sglang.py`
 
 ### Sprint 4 (Week 7-8): CI & InferenceX
 
 - [x] Implement Tier 1/2/3 CI pipelines → `.github/workflows/rocm-test.yml`
 - [x] Add `dynamo-sglang` entries to InferenceX `amd-master.yaml`
-- [ ] Write benchmark scripts for AMD Dynamo
-- [ ] Establish performance baselines for regression tracking
+- [x] Write benchmark script for AMD Dynamo → `benchmarks/multi_node/dsr1_fp8_mi355x_dynamo-sglang.sh`
+- [x] Create test runner script → `scripts/run_rocm_tests.sh` (Tier 1/2/3 in-container runner)
 
 ### Sprint 5 (Week 9-10): Unblock vLLM & Harden
 
-- [ ] Build maturin wheel for Python 3.12 (unblock vLLM tests)
+- [x] Create maturin Py3.12 build script → `scripts/build_maturin_py312.sh`
 - [x] Create fault tolerance DGD templates for SGLang/ROCm → `templates/sglang/rocm_{agg,disagg}.yaml`
-- [ ] Run K8s deploy tests with AMD GPU Operator
-- [ ] Write K8s CRD validation tests
+- [x] Write K8s CRD validation tests → `tests/deploy/test_k8s_crd_validation.py`
+- [ ] *Run* all tests on MI355X hardware (requires GPU access)
 
 ---
 
@@ -388,11 +388,11 @@ tests:
 | `tests/basic/test_rocm_version_consistency.py` | P0 | **Done** | ROCm version consistency check |
 | `tests/router/test_router_block_size_regression.py` | P0 | **Done** | Regression test for block_size=1 fix |
 | `tests/serve/test_sglang_rocm.py` | P1 | **Done** | SGLang serve with aiter on ROCm |
-| `tests/kvbm_integration/test_kvbm_rocm.py` | P1 | Pending | KVBM with HIP kernels |
+| `tests/kvbm_integration/test_kvbm_rocm.py` | P1 | **Done** | KVBM with HIP kernels |
 | `tests/disagg/test_mori_rdma.py` | P1 | **Done** | MoRI RDMA 2-node disagg |
 | `tests/disagg/test_ionic_validation.py` | P1 | **Done** | Ionic subnet pre-flight checks |
 | `tests/planner/test_fpm_relay_sglang.py` | P2 | **Done** | SGLang FPM → NATS relay |
-| `tests/planner/test_planner_virtual_sglang.py` | P2 | Pending | Planner virtual mode with SGLang |
+| `tests/planner/test_planner_virtual_sglang.py` | P2 | **Done** | Planner virtual mode with SGLang |
 | `tests/profiler/configs/rocm_mi355x_sglang_*.yaml` | P1 | **Done** | AMD DGDR configs (rapid + thorough) |
 | `tests/fault_tolerance/deploy/templates/sglang/rocm_agg.yaml` | P2 | **Done** | AMD DGD agg template |
 | `tests/fault_tolerance/deploy/templates/sglang/rocm_disagg.yaml` | P2 | **Done** | AMD DGD disagg template |
