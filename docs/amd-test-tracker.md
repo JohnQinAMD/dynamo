@@ -111,10 +111,11 @@
 
 ## Remaining
 
-1. **Disagg KV transfer**: Root cause = no GPU Direct RDMA between ionic NICs and AMD GPUs.
-   - Mooncake backend: ibv_reg_mr fails ENOMEM for GPU memory (no GDR)
-   - RIXL/nixl backend: `register_memory(kv_addrs, "VRAM")` → NIXL_ERR_BACKEND
-   - TCP fallback: unreliable for multi-GB KV cache transfers
-   - **Fix needed**: CPU-mediated transfer path (VRAM→DRAM→RDMA→DRAM→VRAM) or AMD GPU peer memory kernel module
+1. **Disagg KV transfer**: Exhaustively tested 4 approaches:
+   - **Mooncake RDMA**: ibv_reg_mr ENOMEM (ionic lacks AMD GPU Direct RDMA)
+   - **Mooncake TCP** (patched `"rdma"→"tcp"`): Init OK, KV data transfer still fails internally
+   - **RIXL/nixl backend**: `register_memory("VRAM")` → NIXL_ERR_BACKEND
+   - **Single-node 2xTP4**: OOM (2x DSV3 exceeds node memory)
+   - **Root cause**: mooncake library uses RDMA memory registration for GPU buffers even in TCP mode. Requires mooncake patch for AMD GPU support or custom CPU-staged transfer.
    - DRAM-to-DRAM RIXL transfer verified at 39.4 GB/s
 2. **K8s + Planner**: Needs AMD GPU Operator deployment
