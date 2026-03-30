@@ -141,7 +141,16 @@ class TestPlannerVirtualSglangE2E:
 
         This doesn't start a full planner loop — it just verifies that
         the config + etcd connection path works.
+
+        Requires nats-server and etcd binaries in PATH.
         """
+        import shutil
+
+        if not shutil.which("nats-server"):
+            pytest.skip("nats-server not in PATH")
+        if not shutil.which("etcd"):
+            pytest.skip("etcd not in PATH")
+
         try:
             from dynamo.planner.utils.planner_config import PlannerConfig
         except ImportError:
