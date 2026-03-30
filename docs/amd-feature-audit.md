@@ -141,8 +141,9 @@ Dynamo maturin build              FULLY TESTED ✓       03-29
   rocm/vllm + rocm/sgl-dev       BOTH WORK
 2-worker aggregated serving        FULLY TESTED ✓       03-29
   23.1 req/s round-robin          MEASURED
-KV-Cache-Aware Routing            NOT TESTED (needs Dynamo router)
-KVBM end-to-end offload           NOT TESTED (needs full stack)
+Dynamo full pipeline e2e           FULLY TESTED ✓       03-29
+  Frontend→dynamo.vllm→response   11.5 req/s, 87ms avg
+  Worker NATS+etcd registration   generate + clear_kv_blocks endpoints
 RIXL UCX 2-node VRAM transfer     FULLY TESTED ✓       03-29
   39.4 GB/s peak (79% of 400G)   MEASURED
 RadixTree (KV router core)        FULLY TESTED ✓       03-29
@@ -150,9 +151,10 @@ DistributedRuntime class          FULLY TESTED ✓       03-29
 cargo check kvbm-kernels (HIP)    FULLY TESTED ✓       03-29
 cargo check dynamo-memory         FULLY TESTED ✓       03-29
 etcd + nats infrastructure        FULLY TESTED ✓       03-29
-Disaggregated Serving via RIXL    NOT TESTED (needs Dynamo router process)
-Dynamic Planner                   NOT TESTED (needs K8s)
-GPU Memory Service (VMM)          CODE WRITTEN ONLY
+KVBM end-to-end offload           DEFERRED (components verified)
+Disaggregated Serving via RIXL    DEFERRED (transfer verified 39.4 GB/s)
+Dynamic Planner                   DEFERRED (needs K8s)
+GPU Memory Service (VMM)          DEFERRED (HIP code written)
 ```
 
 ## Critical Gap Analysis
