@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Aggregated SGLang deployment on AMD MI355X GPUs.
+
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: sglang-rocm-agg
+spec:
+  services:
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      extraPodSpec:
+        mainContainer:
+          image: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+    SglangWorker:
+      envFromSecret: hf-token-secret
+      componentType: worker
+      replicas: 1
+      resources:
+        requests:
+          memory: "50Gi"
+          amd.com/gpu: "8"
+        limits:
+          memory: "256Gi"
+          amd.com/gpu: "8"
+      envs:
+        - name: DYN_SYSTEM_ENABLED
+          value: "true"
+        - name: SGLANG_AITER_MLA_PERSIST
+          value: "False"
+        - name: SGLANG_USE_AITER
+          value: "1"
+        - name: RCCL_MSCCL_ENABLE
+          value: "0"
+        - name: HIP_VISIBLE_DEVICES
+          value: "0,1,2,3,4,5,6,7"
+      extraPodSpec:
+        mainContainer:
+          image: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+          workingDir: /workspace/examples/backends/sglang
+          command:
+          - python3
+          - -m
+          - dynamo.sglang
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --served-model-name
+            - Qwen/Qwen3-0.6B
+            - --page-size
+            - "16"
+            - --tp
+            - "8"
+            - --trust-remote-code
+            - --skip-tokenizer-init
+            - --enable-metrics
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              amd.com/gpu: "8"
+            limits:
+              amd.com/gpu: "8"
