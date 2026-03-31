@@ -16,8 +16,6 @@ try:
 except ImportError:
     EMBEDDING_RECEIVER_FACTORIES = {}
     TransferRequest = None
-    EMBEDDING_RECEIVER_FACTORIES = {}
-    TransferRequest = None
 from dynamo.common.utils import nvtx_utils as _nvtx
 from dynamo.common.utils.engine_response import normalize_finish_reason
 from dynamo.sglang.args import Config
