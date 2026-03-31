@@ -217,7 +217,7 @@ def patch_nixl_for_rocm():
 
         def _staging_get_xfer_descs(reqs, mem_type):
             if mem_type == "VRAM":
-                # Copy local GPU regions to DRAM (remote addrs silently skip)
+                # 1. Copy local GPU regions to DRAM
                 if isinstance(reqs, np.ndarray):
                     for i in range(len(reqs)):
                         staging.copy_d2h(int(reqs[i, 0]), int(reqs[i, 1]))
@@ -226,6 +226,24 @@ def patch_nixl_for_rocm():
                         staging.copy_d2h(int(item[0]), int(item[1]))
                 staging.sync()
                 translated = staging.translate_reqs(reqs)
+
+                # 2. Lazy MR: register only the sub-regions needed for this transfer
+                if isinstance(translated, np.ndarray) and translated.size > 0:
+                    reg_addrs = [(int(translated[i, 0]), int(translated[i, 1]), 0, "")
+                                 for i in range(len(translated))]
+                elif isinstance(translated, list) and translated:
+                    reg_addrs = [(int(r[0]), int(r[1]), 0, "") for r in translated]
+                else:
+                    reg_addrs = []
+
+                if reg_addrs:
+                    try:
+                        per_xfer_descs = self.agent.register_memory(reg_addrs, "DRAM")
+                        if hasattr(self, "_active_mr_descs"):
+                            self._active_mr_descs.append(per_xfer_descs)
+                    except Exception as e:
+                        logger.warning("Lazy MR registration failed: %s", e)
+
                 return _orig_get(translated, "DRAM")
             return _orig_get(reqs, mem_type)
 
@@ -237,33 +255,23 @@ def patch_nixl_for_rocm():
     # ---- 2. register_buffer_to_engine ---------------------------------------
     def _patched_register(self):
         staging: _RocmDramStaging = self._rocm_staging
-        MAX_MR_SIZE = 1024 * 1024 * 1024  # 1GB max per MR (ionic limit)
 
-        def _chunk_register(agent, gpu_ptrs, data_lens, staging_obj, mem_type="DRAM"):
-            """Register buffers in chunks to avoid ionic ibv_reg_mr ENOMEM for large buffers."""
-            all_addrs = []
-            for gpu_ptr, data_len in zip(gpu_ptrs, data_lens):
-                host_ptr = staging_obj.create(gpu_ptr, data_len)
-                if data_len <= MAX_MR_SIZE:
-                    all_addrs.append((host_ptr, data_len, 0, ""))
-                else:
-                    offset = 0
-                    while offset < data_len:
-                        chunk = min(MAX_MR_SIZE, data_len - offset)
-                        all_addrs.append((host_ptr + offset, chunk, 0, ""))
-                        offset += chunk
-            descs = agent.register_memory(all_addrs, mem_type)
-            return descs
+        # Solution A: lazy MR registration for ionic NICs.
+        # ionic has ~3GB total MR capacity — we cannot pre-register all KV buffers.
+        # Instead: create DRAM staging buffers but skip ibv_reg_mr.
+        # MRs will be registered per-transfer in _staging_get_xfer_descs.
 
-        # KV buffers → DRAM staging (chunked for ionic)
-        self.kv_descs = _chunk_register(
-            self.agent, self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens, staging
+        # Create DRAM staging buffers (no registration yet)
+        for gpu_ptr, data_len in zip(
+            self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
+        ):
+            staging.create(gpu_ptr, data_len)
+        logger.info(
+            "ROCm staging: created %d DRAM mirrors (lazy MR — no pre-registration)",
+            len(self.kv_args.kv_data_ptrs),
         )
-        logger.debug("ROCm staging: registered %d KV buffer chunks as DRAM", len(self.kv_args.kv_data_ptrs))
-        if not self.kv_descs:
-            raise Exception("NIXL DRAM registration failed for KV tensors")
 
-        # Aux buffers — already DRAM, no staging needed
+        # Aux buffers are small — register normally
         aux_addrs = []
         for ptr, length in zip(
             self.kv_args.aux_data_ptrs, self.kv_args.aux_data_lens
@@ -273,14 +281,17 @@ def patch_nixl_for_rocm():
         if not self.aux_descs:
             raise Exception("NIXL DRAM registration failed for aux tensors")
 
-        # State buffers → DRAM staging (if present)
+        # State buffers — create staging but skip registration
         if self.kv_args.state_data_ptrs and self.kv_args.state_data_lens:
-            state_addrs = []
-            self.state_descs = _chunk_register(
-                self.agent, self.kv_args.state_data_ptrs, self.kv_args.state_data_lens, staging
-            )
-            if not self.state_descs:
-                raise Exception("NIXL DRAM registration failed for state tensors")
+            for gpu_ptr, data_len in zip(
+                self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
+            ):
+                staging.create(gpu_ptr, data_len)
+
+        # Track per-transfer registrations for cleanup
+        self._active_mr_descs = []
+        self.kv_descs = True  # placeholder — actual descs created per-transfer
+        self.state_descs = True
 
     NixlKVManager.register_buffer_to_engine = _patched_register
 
@@ -360,8 +371,18 @@ def patch_nixl_for_rocm():
 
         result = _orig_recv_poll(self)
         if result == KVPoll.Success and hasattr(self, "_staging_kv_indices"):
+            # DRAM → GPU copy
             self.kv_mgr._staging_post_copy_h2d(self._staging_kv_indices)
             del self._staging_kv_indices
+
+            # Deregister per-transfer MRs to free ionic MR slots
+            if hasattr(self.kv_mgr, "_active_mr_descs"):
+                for descs in self.kv_mgr._active_mr_descs:
+                    try:
+                        self.kv_mgr.agent.deregister_memory(descs)
+                    except Exception:
+                        pass
+                self.kv_mgr._active_mr_descs.clear()
         return result
 
     NixlKVReceiver.poll = _patched_recv_poll
