@@ -22,7 +22,7 @@ We successfully ported NVIDIA Dynamo to AMD MI355X GPUs and validated all four c
 
 ---
 
-**[View Interactive Performance Charts](https://htmlpreview.github.io/?https://github.com/JohnQinAMD/dynamo/blob/amd-additive/docs/amd-performance-plots.html)**
+**[View Interactive Performance Charts](https://raw.githack.com/JohnQinAMD/dynamo/amd-additive/docs/amd-performance-plots.html)** · [Download HTML](https://raw.githubusercontent.com/JohnQinAMD/dynamo/amd-additive/docs/amd-performance-plots.html) (open locally in browser for best experience)
 
 ---
 

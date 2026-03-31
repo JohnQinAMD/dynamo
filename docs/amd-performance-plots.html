@@ -590,7 +590,27 @@ body {
 </div>
 
 <script>
+// Tab switching — isolated so Chart.js load failures can't break navigation
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.sec').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    const sec = document.getElementById(t.dataset.t);
+    if (sec) sec.classList.add('on');
+  });
+});
+</script>
+
+<script>
+if (typeof Chart === 'undefined') {
+  document.querySelector('.main').insertAdjacentHTML('afterbegin',
+    '<div style="background:#2a1a1a;border:1px solid #ff4d52;border-radius:8px;padding:20px;margin-bottom:20px;color:#ff9999;font-size:14px;">' +
+    '<strong>Charts unavailable</strong> — Chart.js CDN failed to load. Tab navigation still works. ' +
+    'Try opening this file directly in a browser (not via GitHub preview).</div>');
+} else {
 Chart.register(ChartDataLabels);
+}
 
 const C = {
   g: '#76B900', gL: 'rgba(118,185,0,.2)',
@@ -638,15 +658,7 @@ const B = {
 
 function M(o) { return JSON.parse(JSON.stringify({ ...B, ...o })); }
 
-// Tab switching
-document.querySelectorAll('.tab').forEach(t => {
-  t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
-    document.querySelectorAll('.sec').forEach(x => x.classList.remove('on'));
-    t.classList.add('on');
-    document.getElementById(t.dataset.t).classList.add('on');
-  });
-});
+if (typeof Chart === 'undefined') { throw new Error('Chart.js not loaded'); }
 
 // ============ OVERVIEW ============
 
