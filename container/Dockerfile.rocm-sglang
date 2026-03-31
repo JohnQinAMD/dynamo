@@ -51,6 +51,9 @@ RUN SITE=$(/opt/venv/bin/python3 -c "import site; print(site.getsitepackages()[0
     echo "from rixl._api import *" > $SITE/nixl/_api.py && \
     echo "from rixl._bindings import *" > $SITE/nixl/_bindings.py
 
+# Auto-patch RIXL DRAM staging in all Python subprocesses (including SGLang scheduler)
+RUN SITE=$(/opt/venv/bin/python3 -c "import site; print(site.getsitepackages()[0])") &&     echo "import dynamo.sglang.nixl_rocm_staging" > $SITE/dynamo_rocm_autofix.pth &&     echo "import dynamo.sglang.mooncake_rocm_staging" >> $SITE/dynamo_rocm_autofix.pth
+
 ENV LD_LIBRARY_PATH="/opt/rocm/rixl/lib/x86_64-linux-gnu:/usr/local/ucx/lib:${LD_LIBRARY_PATH}"
 ENV PYTHONPATH="/opt/rocm/rixl/lib/python3/dist-packages:${PYTHONPATH}"
 ENV NIXL_PREFIX=/opt/rocm/rixl
