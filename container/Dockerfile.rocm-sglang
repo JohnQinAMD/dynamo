@@ -1,9 +1,9 @@
 # Dynamo ROCm + SGLang — all-in-one image for AMD MI300X/MI355X
 #
-# Includes: Dynamo (Rust + Python), SGLang, MoRI, Mooncake, etcd, NATS,
-#           ionic ABI auto-fix, DRAM staging patches, test dependencies
+# Includes: Dynamo, SGLang, MoRI, Mooncake, RIXL/nixl, UCX-ROCm,
+#           etcd, NATS, ionic ABI auto-fix, DRAM staging patches
 #
-# Build:
+# Build (~15 min):
 #   docker build -f container/Dockerfile.rocm-sglang -t amdprimus/dynamo-rocm-sglang:latest .
 #
 # Run:
@@ -14,8 +14,49 @@
 
 FROM rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
 
-# Build Dynamo Rust bindings (abi3 — works on Python 3.10+)
-COPY . /opt/dynamo
+# --- Stage 1: Build UCX with ROCm support (~3 min) ---
+COPY ucx /tmp/ucx-src
+RUN cd /tmp/ucx-src && \
+    [ -f configure ] || ./autogen.sh && \
+    mkdir -p /tmp/ucx-build && cd /tmp/ucx-build && \
+    /tmp/ucx-src/configure --enable-shared --disable-static --disable-doxygen-doc \
+        --enable-optimizations --enable-devel-headers \
+        --with-rocm=/opt/rocm --with-verbs --with-dm --enable-mt \
+        --prefix=/usr/local/ucx > /dev/null 2>&1 && \
+    make -j$(nproc) > /dev/null 2>&1 && \
+    make install > /dev/null 2>&1 && \
+    rm -rf /tmp/ucx-src /tmp/ucx-build && \
+    echo "UCX: $(ls /usr/local/ucx/lib/libucp.so && echo OK)"
+
+# --- Stage 2: Build RIXL (~2 min) ---
+RUN pip install --quiet meson ninja
+COPY RIXL /tmp/rixl-src
+RUN cd /tmp/rixl-src && mkdir -p /tmp/rixl-build && cd /tmp/rixl-build && \
+    PKG_CONFIG_PATH=/usr/local/ucx/lib/pkgconfig \
+    meson setup /tmp/rixl-src --prefix=/opt/rocm/rixl \
+        -Ducx_path=/usr/local/ucx \
+        -Drocm_path=/opt/rocm \
+        -Duse_rocm=true \
+        -Ddisable_gds_backend=true \
+        -Ddisable_mooncake_backend=true > /dev/null 2>&1 && \
+    ninja -j$(nproc) > /dev/null 2>&1 && \
+    ninja install > /dev/null 2>&1 && \
+    rm -rf /tmp/rixl-src /tmp/rixl-build && \
+    echo "RIXL: $(ls /opt/rocm/rixl/lib/x86_64-linux-gnu/libnixl.so && echo OK)"
+
+# Create nixl -> rixl Python shim (SGLang imports nixl, RIXL provides rixl)
+RUN SITE=$(/opt/venv/bin/python3 -c "import site; print(site.getsitepackages()[0])") && \
+    mkdir -p $SITE/nixl && \
+    echo "from rixl import *" > $SITE/nixl/__init__.py && \
+    echo "from rixl._api import *" > $SITE/nixl/_api.py && \
+    echo "from rixl._bindings import *" > $SITE/nixl/_bindings.py
+
+ENV LD_LIBRARY_PATH="/opt/rocm/rixl/lib/x86_64-linux-gnu:/usr/local/ucx/lib:${LD_LIBRARY_PATH}"
+ENV PYTHONPATH="/opt/rocm/rixl/lib/python3/dist-packages:${PYTHONPATH}"
+ENV NIXL_PREFIX=/opt/rocm/rixl
+
+# --- Stage 3: Build Dynamo (~5 min) ---
+COPY dynamo /opt/dynamo
 WORKDIR /opt/dynamo
 RUN export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib && \
     export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)" && \
@@ -23,13 +64,13 @@ RUN export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib && \
     cd lib/bindings/python && maturin develop --release && \
     cd /opt/dynamo && pip install -e .
 
-# Test + runtime dependencies
+# --- Stage 4: Dependencies ---
 RUN pip install --quiet \
     pytest pytest-benchmark pytest-httpserver pytest-asyncio \
     pytest-timeout nats-py boto3 prophet kubernetes_asyncio \
     prometheus_api_client filterpy pmdarima kr8s
 
-# etcd (service discovery)
+# etcd
 RUN wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.21-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
     mkdir -p /usr/local/bin/etcd-dir && \
     tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd-dir --strip-components=1 && \
@@ -37,41 +78,31 @@ RUN wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.
     ln -sf /usr/local/bin/etcd-dir/etcdctl /usr/local/bin/etcdctl && \
     rm /tmp/etcd.tar.gz
 
-# NATS (messaging)
+# NATS
 RUN wget -q https://github.com/nats-io/nats-server/releases/download/v2.10.28/nats-server-v2.10.28-amd64.deb -O /tmp/nats.deb && \
     dpkg -i /tmp/nats.deb && rm /tmp/nats.deb
 
-# Ionic ABI auto-fix entrypoint script
-RUN cat > /usr/local/bin/fix-ionic-abi.sh << 'FIXSCRIPT'
-#!/bin/bash
-# Auto-detect and fix ionic driver ABI mismatch between container and host.
-# The container ships libionic1 54.0-149 but host kernels may have newer versions.
-# This script copies the host's libionic into the container if a mismatch is detected.
-HOST_LIB=$(find /usr/lib/x86_64-linux-gnu -name 'libionic.so.1.1.*' 2>/dev/null | sort -V | tail -1)
-CONTAINER_LIB=$(readlink -f /usr/lib/x86_64-linux-gnu/libionic.so.1 2>/dev/null)
-if [ -n "$HOST_LIB" ] && [ "$HOST_LIB" != "$CONTAINER_LIB" ]; then
-    ln -sf "$(basename $HOST_LIB)" /usr/lib/x86_64-linux-gnu/libionic.so.1
-    ldconfig
-    echo "[ionic-abi] Fixed: $(basename $HOST_LIB)"
-elif [ -f /workspace/libionic_host.so ]; then
-    VER=$(strings /workspace/libionic_host.so | grep -o '54\.0-[0-9]*' | head -1)
-    cp /workspace/libionic_host.so "/usr/lib/x86_64-linux-gnu/libionic.so.1.1.${VER:-54.0-host}"
-    ln -sf "libionic.so.1.1.${VER:-54.0-host}" /usr/lib/x86_64-linux-gnu/libionic.so.1
-    ldconfig
-    echo "[ionic-abi] Fixed from /workspace/libionic_host.so"
-else
-    echo "[ionic-abi] No fix needed or host driver not found"
-fi
-FIXSCRIPT
-RUN chmod +x /usr/local/bin/fix-ionic-abi.sh
+# --- Stage 5: Ionic ABI auto-fix ---
+RUN printf '#!/bin/bash\n\
+# Auto-detect and fix ionic driver ABI mismatch.\n\
+HOST_LIB=$(find /usr/lib/x86_64-linux-gnu -name "libionic.so.1.1.*" 2>/dev/null | sort -V | tail -1)\n\
+CONTAINER_LIB=$(readlink -f /usr/lib/x86_64-linux-gnu/libionic.so.1 2>/dev/null)\n\
+if [ -n "$HOST_LIB" ] && [ "$HOST_LIB" != "$CONTAINER_LIB" ]; then\n\
+    ln -sf "$(basename $HOST_LIB)" /usr/lib/x86_64-linux-gnu/libionic.so.1\n\
+    ldconfig\n\
+    echo "[ionic-abi] Fixed: $(basename $HOST_LIB)"\n\
+fi\n' > /usr/local/bin/fix-ionic-abi.sh && chmod +x /usr/local/bin/fix-ionic-abi.sh
 
-# Verify build
+# --- Verify ---
 RUN python3 -c "from dynamo.llm import ModelType, MockEngineArgs; print('dynamo.llm OK')" && \
     python3 -c "from mooncake.engine import TransferEngine; print('mooncake OK')" && \
+    python3 -c "from nixl._api import nixl_agent; print('nixl/rixl OK')" && \
+    python3 -c "import rixl; print('rixl OK')" && \
     etcd --version | head -1 && \
     nats-server --version
 
 ENV SGLANG_AITER_MLA_PERSIST=False
 ENV RCCL_MSCCL_ENABLE=0
 ENV MC_MAX_SGE=2
+ENV HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 WORKDIR /opt/dynamo

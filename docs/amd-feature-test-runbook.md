@@ -62,7 +62,7 @@ Verify: `ibv_devinfo -d ionic_0 2>&1 | head -5` — no ABI warnings.
 ### 5. Start Infrastructure
 
 ```bash
-export HIP_VISIBLE_DEVICES=0
+export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export SGLANG_AITER_MLA_PERSIST=False
 export RCCL_MSCCL_ENABLE=0
 MY_IP=$(hostname -I | awk '{print $1}')
@@ -314,14 +314,37 @@ python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote
 
 ### Test 11: RIXL DRAM Staging
 
-RIXL (AMD's port of NIXL) requires building from source. See `docs/amd-rocm-build.md` for build steps.
+RIXL (AMD's port of NIXL) is included in `amdprimus/dynamo-rocm-sglang:latest`. The `nixl_rocm_staging.py` monkey-patch provides DRAM staging for ionic NICs.
+
+**Prefill node**:
 
 ```bash
 export SGLANG_NIXL_ROCM_STAGING=1
-# Same commands as Test 9 but with: --disaggregation-transfer-backend nixl
+
+python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
+    --host 0.0.0.0 \
+    --disaggregation-mode prefill \
+    --disaggregation-transfer-backend nixl
 ```
 
-Unit tests pass (12/12) — hipMemcpy D2H/H2D roundtrip, address translation, monkey-patch hooks verified on MI355X.
+**Decode node**:
+
+```bash
+export SGLANG_NIXL_ROCM_STAGING=1
+PREFILL_IP=<prefill-node-ip>
+export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
+export NATS_SERVER=nats://${PREFILL_IP}:4222
+
+python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
+    --host 0.0.0.0 \
+    --disaggregation-mode decode \
+    --disaggregation-transfer-backend nixl
+```
+
+**Important**:
+- `SGLANG_NIXL_ROCM_STAGING=1` activates pinned DRAM bounce buffers
+- Uses same architecture as Mooncake staging (hipMemcpy D2H/H2D)
+- Unit tests pass (12/12), prefill worker verified on MI355X
 
 ---
 
