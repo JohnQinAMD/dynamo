@@ -46,7 +46,7 @@ If you're running a single model on a single GPU, your inference engine alone is
 
 | | [SGLang](https://docs.nvidia.com/dynamo/backends/sg-lang) | [TensorRT-LLM](https://docs.nvidia.com/dynamo/backends/tensor-rt-llm) | [vLLM](https://docs.nvidia.com/dynamo/backends/v-llm) | AMD ROCm |
 |---|:----:|:----------:|:--:|:--:|
-| [**Disaggregated Serving**](https://docs.nvidia.com/dynamo/design-docs/disaggregated-serving) | ✅ | ✅ | ✅ | ✅ (MoRI) |
+| [**Disaggregated Serving**](https://docs.nvidia.com/dynamo/design-docs/disaggregated-serving) | ✅ | ✅ | ✅ | ✅ |
 | [**KV-Aware Routing**](https://docs.nvidia.com/dynamo/components/router) | ✅ | ✅ | ✅ | ✅ |
 | [**SLA-Based Planner**](https://docs.nvidia.com/dynamo/components/planner/planner-guide) | ✅ | ✅ | ✅ | ✅ |
 | [**KVBM**](https://docs.nvidia.com/dynamo/components/kvbm) | 🚧 | ✅ | ✅ | 🚧 |
@@ -201,20 +201,23 @@ python3 -m sglang.launch_server \
 
 **Tested models**: DeepSeek-V3 (671B MoE, FP8, TP=8), Qwen2.5-0.5B-Instruct (TP=1)
 
-### MoRI — AMD's RDMA Transfer Backend
+### Disaggregated Serving on AMD — Three RDMA Backends
 
-For disaggregated prefill/decode, Dynamo needs a high-speed KV cache transfer mechanism between nodes. On NVIDIA, this is NIXL over InfiniBand. On AMD, we use **MoRI** (Modular RDMA Interface):
+For disaggregated prefill/decode, Dynamo transfers KV cache between nodes over RDMA. On NVIDIA this uses NIXL over InfiniBand. On AMD with Pensando Pollara 400 ionic NICs (400Gb/s RoCE v2), three backends are supported:
 
-- **What**: AMD's RDMA library optimized for Pensando Pollara 400 AI NICs (ionic devices, 400Gb/s RoCE v2)
-- **Role**: Data plane for GPU-to-GPU KV cache transfer across nodes during disaggregated serving
-- **Why not NIXL/Mooncake**: Ionic NICs lack GPU Direct RDMA (`ibv_reg_mr(GPU)` returns ENOMEM). MoRI handles this natively with lazy MR registration and ionic-aware SGE limits
-- **Alternatives**: RIXL + DRAM staging (monkey-patch, zero SGLang changes) or Mooncake (with C++ patch)
+| Backend | How it works | Setup |
+|---------|-------------|-------|
+| **MoRI** | AMD's native RDMA library with lazy MR registration and ionic-aware SGE limits | Out of the box |
+| **RIXL + DRAM staging** | RIXL (AMD's NIXL port) with pinned host memory bounce buffers — monkey-patches NixlKVManager at runtime, zero SGLang source changes | `export SGLANG_NIXL_ROCM_STAGING=1` |
+| **Mooncake** | Upstream Mooncake with ROCm patch for GPU/CPU memory detection and ionic max_sge auto-tuning | `bash scripts/patch_mooncake_rocm.sh` |
+
+**Why multiple backends**: Ionic NICs lack GPU Direct RDMA (`ibv_reg_mr(GPU)` returns ENOMEM). Each backend solves this differently — MoRI natively, RIXL via DRAM staging, Mooncake via C++ patch.
 
 ```
 Prefill Node                          Decode Node
-┌──────────┐                         ┌──────────┐
-│ GPU KV   │──MoRI RDMA 400Gb/s──▶   │ GPU KV   │
-│ TP=8     │  (ionic NIC)            │ TP=8     │
+┌──────────┐   MoRI / RIXL / MC      ┌──────────┐
+│ GPU KV   │──── RDMA 400Gb/s ───▶   │ GPU KV   │
+│ TP=8     │   (ionic NIC)           │ TP=8     │
 └──────────┘                         └──────────┘
 ```
 
