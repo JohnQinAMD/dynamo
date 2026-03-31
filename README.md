@@ -44,14 +44,14 @@ If you're running a single model on a single GPU, your inference engine alone is
 
 **Feature support at a glance:**
 
-| | [SGLang](https://docs.nvidia.com/dynamo/backends/sg-lang) | [TensorRT-LLM](https://docs.nvidia.com/dynamo/backends/tensor-rt-llm) | [vLLM](https://docs.nvidia.com/dynamo/backends/v-llm) |
-|---|:----:|:----------:|:--:|
-| [**Disaggregated Serving**](https://docs.nvidia.com/dynamo/design-docs/disaggregated-serving) | ✅ | ✅ | ✅ |
-| [**KV-Aware Routing**](https://docs.nvidia.com/dynamo/components/router) | ✅ | ✅ | ✅ |
-| [**SLA-Based Planner**](https://docs.nvidia.com/dynamo/components/planner/planner-guide) | ✅ | ✅ | ✅ |
-| [**KVBM**](https://docs.nvidia.com/dynamo/components/kvbm) | 🚧 | ✅ | ✅ |
-| [**Multimodal**](https://docs.nvidia.com/dynamo/user-guides/multimodal) | ✅ | ✅ | ✅ |
-| [**Tool Calling**](https://docs.nvidia.com/dynamo/user-guides/tool-calling) | ✅ | ✅ | ✅ |
+| | [SGLang](https://docs.nvidia.com/dynamo/backends/sg-lang) | [TensorRT-LLM](https://docs.nvidia.com/dynamo/backends/tensor-rt-llm) | [vLLM](https://docs.nvidia.com/dynamo/backends/v-llm) | AMD ROCm |
+|---|:----:|:----------:|:--:|:--:|
+| [**Disaggregated Serving**](https://docs.nvidia.com/dynamo/design-docs/disaggregated-serving) | ✅ | ✅ | ✅ | ✅ (MoRI) |
+| [**KV-Aware Routing**](https://docs.nvidia.com/dynamo/components/router) | ✅ | ✅ | ✅ | ✅ |
+| [**SLA-Based Planner**](https://docs.nvidia.com/dynamo/components/planner/planner-guide) | ✅ | ✅ | ✅ | ✅ |
+| [**KVBM**](https://docs.nvidia.com/dynamo/components/kvbm) | 🚧 | ✅ | ✅ | 🚧 |
+| [**Multimodal**](https://docs.nvidia.com/dynamo/user-guides/multimodal) | ✅ | ✅ | ✅ | — |
+| [**Tool Calling**](https://docs.nvidia.com/dynamo/user-guides/tool-calling) | ✅ | ✅ | ✅ | — |
 
 > **[Full Feature Matrix →](https://docs.nvidia.com/dynamo/resources/feature-matrix)** — LoRA, request migration, speculative decoding, and feature interactions.
 
@@ -156,6 +156,48 @@ Pre-built recipes for common models:
 | Qwen3-32B-FP8 | TensorRT-LLM | Aggregated | [View](recipes/qwen3-32b-fp8/trtllm/) |
 
 See [recipes/](recipes/README.md) for the full list. Cloud-specific guides: [AWS EKS](examples/deployments/EKS/) · [Google GKE](examples/deployments/GKE/)
+
+## AMD ROCm Support
+
+Dynamo runs on AMD Instinct MI300X/MI355X GPUs via ROCm. All four core features are validated:
+
+| Feature | AMD MI355X Result |
+|---------|------------------|
+| **KV Router** | 4.35x TTFT improvement at c=32 |
+| **KVBM Multi-turn** | 2.17–3.34x TTFT improvement |
+| **Disaggregated Serving** | 7.4 req/s, 475 tok/s (DSV3 671B via MoRI RDMA) |
+| **Dynamic Planner** | 8/8 tests passed, virtual mode validated |
+
+### Quick Start (AMD)
+
+```bash
+docker run --network=host --privileged \
+    --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
+    --group-add video --shm-size 256G --ipc=host \
+    -v /path/to/models:/models:ro \
+    rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2 \
+    bash -c "
+export SGLANG_AITER_MLA_PERSIST=False
+python3 -m sglang.launch_server \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --attention-backend aiter \
+    --kv-cache-dtype fp8_e4m3 --cuda-graph-max-bs 16
+"
+```
+
+Three disagg RDMA backends are supported: **MoRI** (default), **RIXL + DRAM staging**, and **Mooncake** (with patch).
+
+| Resource | Description |
+|----------|-------------|
+| **[Deployment Guide](docs/amd-rocm-guide.md)** | Containers, networking, 9 deployment examples, Slurm, K8s |
+| **[Build Guide](docs/amd-rocm-build.md)** | Rust bindings, RIXL, HIP kernels |
+| **[System Design](docs/amd-system-design.md)** | Architecture diagrams, additive change strategy |
+| **[Performance Report](docs/amd-performance-report.md)** | 20 benchmarks across 6 MI355X nodes |
+| **[Test Plan](docs/amd-test-plan.md)** | 164 tests passing, CI matrix for Python 3.10 + 3.12 |
+
+> **Branch**: [`amd-dynamo`](https://github.com/JohnQinAMD/dynamo/tree/amd-dynamo) — 72 commits, 99.4% additive (no upstream code removed), upstream-rebaseable.
+
+---
 
 ## Building from Source
 
