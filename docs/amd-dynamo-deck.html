@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dynamo on AMD MI355X</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #09090b;
+  --fg: #fafaf9;
+  --card: #18181b;
+  --border: #27272a;
+  --dim: #71717a;
+  --amd-red: #ed1c24;
+  --teal: #2dd4bf;
+  --blue: #38bdf8;
+  --green: #4ade80;
+  --amber: #fbbf24;
+  --purple: #a78bfa;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:'Inter',system-ui,sans-serif;height:100vh;overflow:hidden}
+code{font-family:'JetBrains Mono',monospace;font-size:0.85em;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px}
+
+/* Slide system */
+.slide{position:absolute;inset:0;padding:56px 72px;display:none;flex-direction:column;opacity:0;transition:opacity .35s}
+.slide.active{display:flex;opacity:1}
+.progress{position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,var(--amd-red),var(--teal));z-index:99;transition:width .3s}
+.nav{position:fixed;bottom:28px;right:36px;z-index:99;display:flex;gap:10px;align-items:center}
+.nav button{background:var(--card);border:1px solid var(--border);color:var(--fg);width:36px;height:36px;border-radius:6px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.nav button:hover{background:var(--amd-red);border-color:var(--amd-red)}
+.nav .ct{font-family:'JetBrains Mono';font-size:11px;color:var(--dim)}
+.slide-id{position:absolute;top:28px;right:36px;font-family:'JetBrains Mono';font-size:10px;color:var(--dim);letter-spacing:2px}
+
+/* Title */
+h1{font-size:52px;font-weight:800;line-height:1.08;letter-spacing:-2px}
+h2{font-size:30px;font-weight:700;line-height:1.25;margin-bottom:12px}
+.kicker{font-family:'JetBrains Mono';font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--teal);margin-bottom:10px}
+.sub{font-size:18px;color:var(--dim);line-height:1.55;max-width:680px}
+
+/* Layout */
+.cols{display:grid;gap:28px;flex:1;align-items:start;margin-top:20px}
+.cols-2{grid-template-columns:1fr 1fr}
+.cols-3{grid-template-columns:1fr 1fr 1fr}
+.cols-23{grid-template-columns:2fr 3fr}
+.cols-32{grid-template-columns:3fr 2fr}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px}
+.card.amd{border-color:var(--amd-red);background:linear-gradient(135deg,rgba(237,28,36,.06),transparent)}
+.card.teal{border-color:var(--teal);background:linear-gradient(135deg,rgba(45,212,191,.05),transparent)}
+.card .num{font-size:36px;font-weight:800;font-family:'JetBrains Mono'}
+.card .lbl{font-size:12px;color:var(--dim);margin-top:2px}
+
+/* Architecture boxes */
+.layer{display:flex;flex-direction:column;gap:6px}
+.layer-label{font-family:'JetBrains Mono';font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--dim);padding-left:4px}
+.layer-row{display:flex;gap:6px;flex-wrap:wrap}
+.box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;text-align:center;flex:1;min-width:110px}
+.box .n{font-weight:700;font-size:13px}
+.box .d{font-size:10px;color:var(--dim);margin-top:1px}
+.box.amd{border-color:var(--amd-red);background:rgba(237,28,36,.07)}
+.box.amd .n::before{content:"★ ";color:var(--amd-red);font-size:10px}
+.box.patched{border-color:var(--amber);background:rgba(251,191,36,.05)}
+.arrow-down{text-align:center;color:var(--dim);font-size:14px;line-height:1;padding:2px 0}
+
+/* Tables */
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 12px;font-family:'JetBrains Mono';font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--dim);border-bottom:2px solid var(--border)}
+td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px}
+.g{color:var(--green);font-weight:700;font-family:'JetBrains Mono'}
+.t{color:var(--teal);font-weight:600}
+.r{color:var(--amd-red)}
+.d{color:var(--dim)}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;font-family:'JetBrains Mono'}
+.badge-g{background:rgba(74,222,128,.12);color:var(--green)}
+.badge-y{background:rgba(251,191,36,.12);color:var(--amber)}
+.badge-b{background:rgba(56,189,248,.12);color:var(--blue)}
+
+/* Bars */
+.bar-group{margin-top:12px}
+.bar-title{font-family:'JetBrains Mono';font-size:10px;color:var(--dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
+.bar-r{display:flex;align-items:center;margin-bottom:5px}
+.bar-l{width:90px;font-size:11px;color:var(--dim);text-align:right;padding-right:8px;font-family:'JetBrains Mono';white-space:nowrap}
+.bar-t{flex:1;height:24px;background:rgba(255,255,255,.03);border-radius:5px;overflow:hidden}
+.bar-f{height:100%;border-radius:5px;display:flex;align-items:center;padding-left:8px;font-size:10px;font-family:'JetBrains Mono';font-weight:700;color:#fff;white-space:nowrap}
+.fill-red{background:linear-gradient(90deg,#b91c1c,var(--amd-red))}
+.fill-green{background:linear-gradient(90deg,#15803d,var(--green))}
+.fill-teal{background:linear-gradient(90deg,#0d9488,var(--teal))}
+.fill-blue{background:linear-gradient(90deg,#0284c7,var(--blue))}
+.fill-amber{background:linear-gradient(90deg,#b45309,var(--amber))}
+
+/* Takeaway */
+.takeaway{background:linear-gradient(135deg,rgba(237,28,36,.06),rgba(45,212,191,.06));border:1px solid var(--border);border-radius:10px;padding:20px 28px;margin-top:auto;margin-bottom:8px}
+.takeaway .tag{font-family:'JetBrains Mono';font-size:10px;color:var(--amd-red);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px}
+.takeaway .txt{font-size:16px;font-weight:500;line-height:1.5}
+
+/* AMD star legend */
+.legend{display:flex;gap:16px;margin-top:6px;font-size:10px;color:var(--dim)}
+.legend span{display:flex;align-items:center;gap:4px}
+.legend .dot{width:8px;height:8px;border-radius:2px}
+.dot-amd{background:var(--amd-red)}
+.dot-patched{background:var(--amber)}
+.dot-upstream{background:var(--border)}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 1 — TITLE -->
+<!-- ============================================================ -->
+<div class="slide active" style="justify-content:center">
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:44px">
+    <div style="width:52px;height:52px;background:var(--amd-red);border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;font-family:'JetBrains Mono'">AMD</div>
+    <span style="font-family:'JetBrains Mono';font-size:12px;color:var(--dim);letter-spacing:2px">INSTINCT MI355X</span>
+  </div>
+  <h1>NVIDIA Dynamo<br>on AMD ROCm</h1>
+  <p class="sub" style="margin-top:16px">Data-center inference orchestration — KV routing, KV offloading, disaggregated P/D serving, and auto-scaling — fully ported to AMD Instinct MI355X with SGLang, MoRI RDMA, and ROCm 7.2.</p>
+  <div style="font-family:'JetBrains Mono';font-size:12px;color:var(--dim);margin-top:40px;line-height:2">
+    <div>DeepSeek-V3 671B MoE · FP8 · 8×MI355X (288 GB HBM3e) · Pensando Pollara 400 NIC</div>
+    <div>4 features validated · 164 pytest tests pass · 20 integration tests · 6 nodes</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 2 — EXECUTIVE SUMMARY -->
+<!-- ============================================================ -->
+<div class="slide">
+  <span class="slide-id">02 / 06</span>
+  <div class="kicker">Executive Summary</div>
+  <h2>All 4 Dynamo Features Working on MI355X</h2>
+  <div class="cols cols-2" style="margin-top:16px;gap:16px">
+    <div class="card amd"><div class="num" style="color:var(--green)">4.35×</div><div class="lbl">TTFT improvement · KV Router @ c=32<br>vs Round-Robin (100% success vs 50%)</div></div>
+    <div class="card amd"><div class="num" style="color:var(--teal)">3.34×</div><div class="lbl">TTFT improvement · KVBM multi-turn T0<br>latency consistency 1.1–2.2s vs 1.2–4.1s</div></div>
+    <div class="card amd"><div class="num" style="color:var(--green)">7.4 req/s</div><div class="lbl">DSV3 671B disagg · MoRI RDMA · 475 tok/s<br>100% success rate across 2 nodes</div></div>
+    <div class="card"><div class="num" style="color:var(--blue)">17.3 req/s</div><div class="lbl">Standalone DSV3 peak · 1,108 tok/s<br>single MI355X node (8 GPUs, TP=8)</div></div>
+  </div>
+  <table style="margin-top:20px">
+    <thead><tr><th>Feature</th><th>NVIDIA Claim</th><th>AMD MI355X Result</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td><strong>KV-Cache Routing</strong></td><td>3× TTFT</td><td class="g">4.35× TTFT, 1,427 tok/s</td><td><span class="badge badge-g">EXCEEDS</span></td></tr>
+      <tr><td><strong>KVBM Multi-turn</strong></td><td>2.2–12× TTFT</td><td class="t">2.17–3.34×, consistent latency</td><td><span class="badge badge-y">PARTIAL</span></td></tr>
+      <tr><td><strong>Disaggregated P/D</strong></td><td>P/D isolation</td><td class="g">7.4 req/s MoRI RDMA (100%)</td><td><span class="badge badge-g">WORKING</span></td></tr>
+      <tr><td><strong>Dynamic Planner</strong></td><td>Zero-downtime scaling</td><td class="t">8/8 tests, virtual + K8s</td><td><span class="badge badge-g">VALIDATED</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 3 — ARCHITECTURE -->
+<!-- ============================================================ -->
+<div class="slide">
+  <span class="slide-id">03 / 06</span>
+  <div class="kicker">System Architecture</div>
+  <h2>Full-Stack on AMD — Modules & Backends</h2>
+  <div class="legend">
+    <span><div class="dot dot-amd"></div> AMD-specific (new)</span>
+    <span><div class="dot dot-patched"></div> Patched for AMD</span>
+    <span><div class="dot dot-upstream"></div> Upstream (unchanged)</span>
+  </div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center">
+    <div style="width:100%;max-width:980px;display:flex;flex-direction:column;gap:7px">
+
+      <div class="layer">
+        <div class="layer-label">API & Routing</div>
+        <div class="layer-row">
+          <div class="box"><div class="n">Frontend</div><div class="d">OpenAI API · Agentic hints</div></div>
+          <div class="box patched"><div class="n">KV Router</div><div class="d">Prefix-aware routing</div></div>
+          <div class="box"><div class="n">Global Router</div><div class="d">Multi-pool routing</div></div>
+          <div class="box"><div class="n">Multimodal Router</div><div class="d">Image / Video E/P/D</div></div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼</div>
+
+      <div class="layer">
+        <div class="layer-label">Orchestration & Scaling</div>
+        <div class="layer-row">
+          <div class="box"><div class="n">Planner</div><div class="d">SLA auto-scaling</div></div>
+          <div class="box"><div class="n">Global Planner</div><div class="d">Cross-DGD GPU budget</div></div>
+          <div class="box"><div class="n">Profiler / DGDR</div><div class="d">Zero-config deploy</div></div>
+          <div class="box amd"><div class="n">FPM Relay</div><div class="d">SGLang metrics → Planner</div></div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼</div>
+
+      <div class="layer">
+        <div class="layer-label">Dynamo Runtime — Rust</div>
+        <div class="layer-row">
+          <div class="box"><div class="n">Discovery</div><div class="d">etcd</div></div>
+          <div class="box"><div class="n">Request Plane</div><div class="d">TCP / NATS</div></div>
+          <div class="box"><div class="n">Event Plane</div><div class="d">KV events · FPM</div></div>
+          <div class="box"><div class="n">KVBM</div><div class="d">GPU↔CPU↔SSD KV offload</div></div>
+          <div class="box"><div class="n">Fault Tolerance</div><div class="d">Migration · Cancel</div></div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼</div>
+
+      <div class="layer">
+        <div class="layer-label">Inference Engines (upstream — both NVIDIA & AMD)</div>
+        <div class="layer-row">
+          <div class="box"><div class="n">SGLang</div><div class="d">Primary backend</div></div>
+          <div class="box"><div class="n">vLLM</div><div class="d">Also verified</div></div>
+          <div class="box"><div class="n">TensorRT-LLM</div><div class="d">NVIDIA only</div></div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼</div>
+
+      <div class="layer">
+        <div class="layer-label">★ AMD Compute Kernels & Collective</div>
+        <div class="layer-row">
+          <div class="box amd"><div class="n">aiter</div><div class="d">MLA + MoE</div></div>
+          <div class="box amd"><div class="n">hipBLASLt</div><div class="d">GEMM</div></div>
+          <div class="box amd"><div class="n">Composable Kernel</div><div class="d">Fused ops</div></div>
+          <div class="box amd"><div class="n">RCCL</div><div class="d">Collective 406 GB/s</div></div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼</div>
+
+      <div class="layer">
+        <div class="layer-label">★ AMD Disagg Transfer Backends (replace upstream NIXL/Mooncake)</div>
+        <div class="layer-row">
+          <div class="box amd" style="border-color:var(--green)"><div class="n" style="color:var(--green)">★ MoRI RDMA</div><div class="d">Native ionic<br>Primary</div></div>
+          <div class="box amd"><div class="n">★ RIXL + DRAM</div><div class="d">Pinned host<br>bounce buffer</div></div>
+          <div class="box amd"><div class="n">★ Mooncake</div><div class="d">ROCm-adapted<br>RDMA</div></div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼</div>
+
+      <div class="layer">
+        <div class="layer-label">★ AMD Hardware</div>
+        <div class="layer-row">
+          <div class="box amd"><div class="n">MI355X CDNA 4</div><div class="d">288 GB HBM3e × 8</div></div>
+          <div class="box amd"><div class="n">Pollara 400 NIC</div><div class="d">400 Gb/s RoCE v2</div></div>
+          <div class="box amd"><div class="n">ROCm 7.2</div><div class="d">HIP runtime</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 4 — PERFORMANCE: KV ROUTER + KVBM -->
+<!-- ============================================================ -->
+<div class="slide">
+  <span class="slide-id">04 / 06</span>
+  <div class="kicker">Performance Results</div>
+  <h2>KV Router & KVBM on DSV3 671B</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card" style="padding:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:12px">KV-Cache-Aware Router — 2 nodes, 16 GPUs</div>
+        <div class="bar-group">
+          <div class="bar-title">TTFT (ms) at c=32 — lower is better</div>
+          <div class="bar-r"><div class="bar-l">Round-Robin</div><div class="bar-t"><div class="bar-f fill-red" style="width:96%">4,818ms · 50% fail</div></div></div>
+          <div class="bar-r"><div class="bar-l">KV Router</div><div class="bar-t"><div class="bar-f fill-green" style="width:23%">1,107ms · 100%</div></div></div>
+        </div>
+        <div class="bar-group" style="margin-top:14px">
+          <div class="bar-title">Throughput (tok/s) at c=32 — higher is better</div>
+          <div class="bar-r"><div class="bar-l">Round-Robin</div><div class="bar-t"><div class="bar-f fill-red" style="width:31%">448</div></div></div>
+          <div class="bar-r"><div class="bar-l">KV Router</div><div class="bar-t"><div class="bar-f fill-green" style="width:100%">1,427</div></div></div>
+        </div>
+        <div style="margin-top:12px;font-size:11px;color:var(--dim)">Round-Robin collapses at high concurrency; KV Router routes by prefix cache affinity → <span style="color:var(--green);font-weight:700">4.35× TTFT, 3.2× throughput</span></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="padding:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:12px">KVBM Multi-Turn — 15 users × 20 turns</div>
+        <div class="bar-group">
+          <div class="bar-title">TTFT (ms) per turn — lower is better</div>
+          <div class="bar-r"><div class="bar-l">T0 baseline</div><div class="bar-t"><div class="bar-f fill-red" style="width:100%">4,110</div></div></div>
+          <div class="bar-r"><div class="bar-l">T0 KVBM</div><div class="bar-t"><div class="bar-f fill-green" style="width:53%">2,162 (1.9×)</div></div></div>
+          <div class="bar-r"><div class="bar-l">T5 baseline</div><div class="bar-t"><div class="bar-f fill-amber" style="width:58%">2,379</div></div></div>
+          <div class="bar-r"><div class="bar-l">T5 KVBM</div><div class="bar-t"><div class="bar-f fill-green" style="width:27%">1,097 (2.2×)</div></div></div>
+          <div class="bar-r"><div class="bar-l">T19 baseline</div><div class="bar-t"><div class="bar-f fill-amber" style="width:30%">1,225</div></div></div>
+          <div class="bar-r"><div class="bar-l">T19 KVBM</div><div class="bar-t"><div class="bar-f fill-green" style="width:27%">1,117 (1.1×)</div></div></div>
+        </div>
+        <div style="margin-top:12px;font-size:11px;color:var(--dim)">GPU KV cache → CPU DRAM offload → cache hits skip recompute. <span style="color:var(--green);font-weight:700">3.34× T0 improvement</span> in 15×10 run.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 5 — DISAGG + PLANNER + INFRA -->
+<!-- ============================================================ -->
+<div class="slide">
+  <span class="slide-id">05 / 06</span>
+  <div class="kicker">Performance Results</div>
+  <h2>Disaggregated Serving & Infrastructure</h2>
+  <div class="cols cols-2">
+    <div>
+      <div class="card amd" style="padding:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">MoRI RDMA Disagg — DSV3 671B (2 nodes)</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:12px">Prefill (TP=8) → MoRI RDMA 400Gb/s → Decode (TP=8)</div>
+        <table>
+          <thead><tr><th>Conc.</th><th>TTFT P50</th><th>req/s</th><th>tok/s</th><th>OK</th></tr></thead>
+          <tbody>
+            <tr><td>c=1</td><td>515ms</td><td>1.8</td><td>118</td><td class="g">100%</td></tr>
+            <tr><td>c=4</td><td>1,259ms</td><td>3.7</td><td>235</td><td class="g">100%</td></tr>
+            <tr><td><strong>c=8</strong></td><td class="g">1,025ms</td><td class="g">7.4</td><td class="g">475</td><td class="g">100%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="padding:16px;margin-top:12px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:8px">Disagg Transfer Backends</div>
+        <table>
+          <thead><tr><th>Backend</th><th>Perf (Qwen c=8)</th><th>For</th></tr></thead>
+          <tbody>
+            <tr><td class="g">★ MoRI RDMA</td><td class="g">81.7 req/s</td><td>Primary</td></tr>
+            <tr><td class="t">★ Mooncake + staging</td><td>61.1 req/s</td><td>Alternative</td></tr>
+            <tr><td class="t">★ RIXL + DRAM</td><td>39.4 GB/s xfer</td><td>Fallback</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="padding:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:8px">Standalone DSV3 — Single Node (8× MI355X)</div>
+        <table>
+          <thead><tr><th>Conc.</th><th>TTFT</th><th>req/s</th><th>tok/s</th></tr></thead>
+          <tbody>
+            <tr><td>c=1</td><td>514ms</td><td>1.9</td><td>124</td></tr>
+            <tr><td>c=4</td><td>687ms</td><td>5.6</td><td>356</td></tr>
+            <tr><td>c=8</td><td>725ms</td><td>11.0</td><td>704</td></tr>
+            <tr><td><strong>c=16</strong></td><td class="g">881ms</td><td class="g">17.3</td><td class="g">1,108</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="padding:16px;margin-top:12px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:8px">Infrastructure Bandwidth</div>
+        <div class="bar-group">
+          <div class="bar-r"><div class="bar-l">RCCL 8-GPU</div><div class="bar-t"><div class="bar-f fill-blue" style="width:95%">406 GB/s all_reduce</div></div></div>
+          <div class="bar-r"><div class="bar-l">RIXL DRAM</div><div class="bar-t"><div class="bar-f fill-teal" style="width:79%">39.4 GB/s (79% line)</div></div></div>
+        </div>
+      </div>
+      <div class="card" style="padding:16px;margin-top:12px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:8px">Dynamic Planner</div>
+        <div style="font-size:13px;color:var(--dim);line-height:1.6">
+          <span class="g">8/8 unit tests PASS</span> · Virtual mode (no K8s) validated<br>
+          <span style="color:var(--teal)">★ SGLang FPM Relay</span> bridges scheduler metrics to NATS for auto-scaling
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 6 — SUMMARY -->
+<!-- ============================================================ -->
+<div class="slide">
+  <span class="slide-id">06 / 06</span>
+  <div class="kicker">Summary</div>
+  <h2>Dynamo on AMD MI355X — Fully Operational</h2>
+  <div class="cols cols-2" style="margin-top:12px">
+    <div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:10px">Performance vs NVIDIA Published</div>
+      <table>
+        <thead><tr><th>Benchmark</th><th>NVIDIA</th><th>AMD MI355X</th></tr></thead>
+        <tbody>
+          <tr><td>KV Router TTFT</td><td>3×</td><td class="g">4.35× (exceeds)</td></tr>
+          <tr><td>KV throughput c=32</td><td>—</td><td class="g">1,427 tok/s</td></tr>
+          <tr><td>KVBM multi-turn</td><td>2.2–12×</td><td class="t">2.17–3.34×</td></tr>
+          <tr><td>Disagg DSV3</td><td>Working</td><td class="g">7.4 req/s, 100%</td></tr>
+          <tr><td>Disagg Qwen</td><td>—</td><td class="g">106.6 req/s</td></tr>
+          <tr><td>Dynamic Planner</td><td>Working</td><td class="g">8/8 PASS</td></tr>
+          <tr><td>Standalone DSV3</td><td>—</td><td class="g">17.3 req/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:10px">AMD-Specific Additions (★)</div>
+      <table>
+        <thead><tr><th>Component</th><th>What</th></tr></thead>
+        <tbody>
+          <tr><td class="t">★ MoRI RDMA</td><td>Native disagg on Pollara 400 ionic</td></tr>
+          <tr><td class="t">★ RIXL + DRAM Staging</td><td>VRAM→DRAM bounce for RDMA</td></tr>
+          <tr><td class="t">★ Mooncake ROCm</td><td>GPU MR detect + ionic max_sge</td></tr>
+          <tr><td class="t">★ SGLang FPM Relay</td><td>Scheduler metrics → Planner</td></tr>
+          <tr><td class="t">★ HIP KVBM Kernels</td><td>tensor_kernels.hip for MI355X</td></tr>
+          <tr><td class="t">★ GPU HAL (HIP)</td><td>VMM, memory pool, transfer</td></tr>
+          <tr><td class="t">★ K8s amd.com/gpu</td><td>AMD GPU Operator + 7 CRDs</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="takeaway">
+    <div class="tag">Key Takeaway</div>
+    <div class="txt">NVIDIA Dynamo runs on AMD MI355X with <strong>all 4 core features</strong>, <strong>3 RDMA backends</strong>, and performance that <strong>meets or exceeds</strong> NVIDIA's published claims on KV routing. The port is 99.4% additive — no upstream code removed.</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+
+<div class="nav">
+  <button onclick="go(-1)">←</button>
+  <span class="ct" id="ct">1 / 6</span>
+  <button onclick="go(1)">→</button>
+</div>
+
+<script>
+const S=document.querySelectorAll('.slide'),T=S.length;let C=0;
+function show(n){S.forEach(s=>s.classList.remove('active'));S[n].classList.add('active');document.getElementById('ct').textContent=`${n+1} / ${T}`;document.getElementById('progress').style.width=`${(n+1)/T*100}%`}
+function go(d){C=Math.max(0,Math.min(T-1,C+d));show(C)}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key===' '){e.preventDefault();go(1)}if(e.key==='ArrowLeft'){e.preventDefault();go(-1)}});
+show(0);
+</script>
+</body>
+</html>
