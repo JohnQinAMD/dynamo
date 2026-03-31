@@ -364,7 +364,220 @@ For fast validation (starts in seconds), replace the model args:
 # Remove: --kv-cache-dtype, --cuda-graph-max-bs, --chunked-prefill-size
 ```
 
-### 3.4 Dynamic Planner
+---
+
+## 4. Deployment Examples
+
+### Example A — Single-Node Standalone (simplest)
+
+One node, one worker, no disaggregation. Good for dev/test.
+
+```bash
+docker exec -it dynamo-worker bash
+
+export SGLANG_AITER_MLA_PERSIST=False
+export RCCL_MSCCL_ENABLE=0
+export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+MY_IP=$(hostname -I | awk '{print $1}')
+
+# etcd + NATS
+etcd --listen-client-urls http://0.0.0.0:2379 \
+     --advertise-client-urls http://${MY_IP}:2379 &
+nats-server -p 4222 -js &
+sleep 2
+export ETCD_ENDPOINTS="http://${MY_IP}:2379"
+export NATS_SERVER="nats://${MY_IP}:4222"
+
+# Build dynamo (first time)
+cp -r /workspace/dynamo /tmp/dynamo && cd /tmp/dynamo
+MODE=develop bash scripts/build_dynamo_wheel.sh
+
+# Frontend + Worker
+python3 -m dynamo.frontend --http-port 8000 --router-mode round-robin &
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --attention-backend aiter \
+    --kv-cache-dtype fp8_e4m3 --cuda-graph-max-bs 16 \
+    --chunked-prefill-size 32768 --mem-fraction-static 0.80
+
+# Test: curl http://localhost:8000/v1/chat/completions -d '...'
+```
+
+### Example B — Single-Node with KV Router (shared-prefix caching)
+
+Same as A but with KV-cache-aware routing. Best for workloads with repeated system prompts.
+
+```bash
+# Frontend with KV Router (not round-robin)
+python3 -m dynamo.frontend --http-port 8000 \
+    --router-mode kv --kv-cache-block-size 16 &
+
+# Worker must use --page-size 16 to match
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --attention-backend aiter \
+    --kv-cache-dtype fp8_e4m3 --cuda-graph-max-bs 16 \
+    --page-size 16 \
+    --mem-fraction-static 0.80
+```
+
+**Result**: 4.35x TTFT improvement at c=32.
+
+### Example C — 2-Node KV Router (scale-out)
+
+Two worker nodes behind one frontend. KV Router directs requests based on prefix cache affinity.
+
+```bash
+# Node A: Frontend + etcd/NATS + Worker-1
+python3 -m dynamo.frontend --http-port 8000 \
+    --router-mode kv --kv-cache-block-size 16 &
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --page-size 16 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --cuda-graph-max-bs 16 --mem-fraction-static 0.80
+
+# Node B: Worker-2 (points to Node A's etcd/NATS)
+export ETCD_ENDPOINTS="http://<nodeA-ip>:2379"
+export NATS_SERVER="nats://<nodeA-ip>:4222"
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --page-size 16 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --cuda-graph-max-bs 16 --mem-fraction-static 0.80
+```
+
+**Result**: 20 req/s, 1,279 tok/s at c=32 (100% success).
+
+### Example D — KVBM Multi-Turn (conversation caching)
+
+Single node with KV Block Manager for multi-turn conversation acceleration.
+
+```bash
+export DYN_KVBM_CPU_CACHE_GB=20  # offload KV to 20GB host memory
+
+python3 -m dynamo.frontend --http-port 8000 --router-mode kv --kv-cache-block-size 16 &
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --page-size 16 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --cuda-graph-max-bs 16 --mem-fraction-static 0.80
+```
+
+**Result**: 2.17-3.34x TTFT improvement for 15-user x 20-turn conversations.
+
+### Example E — 2-Node Disagg with RIXL DRAM Staging
+
+Same as the MoRI disagg walkthrough above, but using RIXL + DRAM staging:
+
+```bash
+# On BOTH nodes:
+export SGLANG_NIXL_ROCM_STAGING=1
+
+# Prefill node:
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 --tp-size 8 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --disaggregation-mode prefill \
+    --disaggregation-transfer-backend nixl
+
+# Decode node:
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 --tp-size 8 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --disaggregation-mode decode \
+    --disaggregation-transfer-backend nixl
+```
+
+### Example F — 2-Node Disagg with Mooncake RDMA
+
+Apply the ROCm patch first, then run:
+
+```bash
+# One-time (in each container):
+bash scripts/patch_mooncake_rocm.sh
+
+# Prefill node:
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 --tp-size 8 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --disaggregation-mode prefill \
+    --disaggregation-transfer-backend mooncake
+
+# Decode node:
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 --tp-size 8 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 \
+    --disaggregation-mode decode \
+    --disaggregation-transfer-backend mooncake
+```
+
+### Example G — Dynamic Planner (auto-scaling)
+
+Single node, planner in virtual mode (no K8s needed):
+
+```bash
+export DYN_FORWARDPASS_METRIC_PORT=20380
+
+# Frontend + Worker (same as Example A)
+python3 -m dynamo.frontend --http-port 8000 --router-mode round-robin &
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 --tp-size 8 \
+    --attention-backend aiter --kv-cache-dtype fp8_e4m3 &
+
+# Planner (separate terminal)
+python3 -m dynamo.planner \
+    --environment virtual --backend sglang --mode agg \
+    --enable-load-scaling --ttft 1000 --itl 100 \
+    --min-endpoint 1 --max-gpu-budget 16
+```
+
+### Example H — Quick Dev Loop with Qwen-0.5B
+
+For rapid iteration — model loads in seconds, runs on 1 GPU:
+
+```bash
+export HIP_VISIBLE_DEVICES=0
+
+# Standalone (no disagg)
+python3 -m dynamo.frontend --http-port 8000 --router-mode round-robin &
+python3 -m dynamo.sglang \
+    --model-path Qwen/Qwen2.5-0.5B-Instruct \
+    --tp-size 1 --trust-remote-code
+
+# Disagg (single-node, 2 GPUs, one prefill + one decode)
+export HIP_VISIBLE_DEVICES=0
+python3 -m dynamo.sglang \
+    --model-path Qwen/Qwen2.5-0.5B-Instruct --tp-size 1 \
+    --disaggregation-mode prefill \
+    --disaggregation-transfer-backend mori &
+
+export HIP_VISIBLE_DEVICES=1
+python3 -m dynamo.sglang \
+    --model-path Qwen/Qwen2.5-0.5B-Instruct --tp-size 1 \
+    --disaggregation-mode decode \
+    --disaggregation-transfer-backend mori
+```
+
+### Scenario Summary
+
+| Example | Nodes | Feature | Backend | Model |
+|---------|-------|---------|---------|-------|
+| A | 1 | Standalone | — | DSV3 |
+| B | 1 | KV Router | — | DSV3 |
+| C | 2 | KV Router scale-out | — | DSV3 |
+| D | 1 | KVBM multi-turn | — | DSV3 |
+| E | 2 | Disagg P/D | RIXL DRAM | DSV3 |
+| F | 2 | Disagg P/D | Mooncake | DSV3 |
+| G | 1 | Dynamic Planner | — | DSV3 |
+| H | 1 | Quick dev/test | MoRI | Qwen-0.5B |
+| I | 1 | Planner + FPM relay | — | DSV3 |
+
+> The MoRI disagg walkthrough (§3.3) covers Example E with MoRI backend — the most common production scenario.
+
+---
+
+### Example I — Dynamic Planner with FPM Relay
 
 ```bash
 # Enable FPM relay for SGLang
@@ -379,7 +592,7 @@ python3 -m dynamo.planner \
 
 ---
 
-## 4. Kubernetes Deployment
+## 5. Kubernetes Deployment
 
 ### Prerequisites
 
@@ -425,7 +638,7 @@ spec:
 
 ---
 
-## 5. Bug Fixes Applied
+## 6. Bug Fixes Applied
 
 | Bug | Fix | Impact |
 |-----|-----|--------|
@@ -438,7 +651,7 @@ spec:
 
 ---
 
-## 6. Performance Summary
+## 7. Performance Summary
 
 | Benchmark | Result |
 |-----------|--------|
@@ -452,7 +665,7 @@ spec:
 
 ---
 
-## 7. Repository Structure
+## 8. Repository Structure
 
 ```
 dynamo/
@@ -473,7 +686,7 @@ dynamo/
 
 ---
 
-## 8. Python Version Compatibility
+## 9. Python Version Compatibility
 
 Dynamo supports **Python 3.10, 3.11, and 3.12** via the PyO3 stable ABI (`abi3-py310`). A single Rust wheel works on all versions >= 3.10.
 
