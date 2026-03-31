@@ -138,7 +138,7 @@ flowchart LR
 |:--------|:------:|:------------|:------|
 | **🆕 MoRI RDMA** | ✅ | **106.6 req/s** (Qwen) · **7.4 req/s** (DSV3) | — |
 | **🆕 RIXL + DRAM Staging** | ✅ | RDMA via pinned host bounce | Monkey-patch, zero SGLang changes |
-| **🆕 Mooncake + ROCm patch** | ⚠️ | — | Patch applied, GPU MR returns clear error |
+| **🆕 Mooncake + ROCm patch** | ✅ | — | `bash scripts/patch_mooncake_rocm.sh` to enable |
 | Mooncake RDMA (unpatched) | ❌ | — | `ibv_reg_mr ENOMEM` — no GDR on ionic |
 | Mooncake TCP | ⚠️ | 76.2 req/s (Qwen only) | DSV3 crashes |
 | RIXL / nixl (unpatched) | ❌ | — | VRAM registration fails |

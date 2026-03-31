@@ -191,7 +191,17 @@ python3 -m dynamo.sglang --model /models/DeepSeek-V3 --tp-size 8 ...
 
 **Result**: 2.17x–3.34x TTFT improvement for multi-turn conversations.
 
-### 3.3 Disaggregated Serving (MoRI RDMA)
+### 3.3 Disaggregated Serving
+
+Three RDMA backends are supported on AMD:
+
+| Backend | Setup | Performance | Best For |
+|---------|-------|-------------|----------|
+| **MoRI** | Out of the box | 7.4 req/s DSV3, 106.6 req/s Qwen | Default choice |
+| **RIXL + DRAM staging** | `export SGLANG_NIXL_ROCM_STAGING=1` | RDMA via pinned host bounce | When MoRI unavailable |
+| **Mooncake RDMA** | `bash scripts/patch_mooncake_rocm.sh` | Requires rebuild | When Mooncake is required |
+
+#### MoRI (recommended)
 
 ```bash
 # PREFILL NODE (Node A, ionic_0)
@@ -207,7 +217,23 @@ python3 -m dynamo.sglang --model /models/DeepSeek-V3 --tp-size 8 \
     --disaggregation-ib-device ionic_1
 ```
 
-**Result**: 7.4 req/s, 475 tok/s with DSV3 671B, 100% success rate.
+#### RIXL + DRAM Staging
+
+```bash
+export SGLANG_NIXL_ROCM_STAGING=1  # auto-detected on ROCm
+# Then use --disaggregation-transfer-backend nixl (same args as above)
+```
+
+#### Mooncake RDMA (requires patch + rebuild)
+
+```bash
+# One-time setup: patch and rebuild Mooncake in container
+bash scripts/patch_mooncake_rocm.sh
+
+# Then use --disaggregation-transfer-backend mooncake
+```
+
+**Result**: MoRI achieves 7.4 req/s, 475 tok/s with DSV3 671B, 100% success rate.
 
 ### 3.4 Dynamic Planner
 

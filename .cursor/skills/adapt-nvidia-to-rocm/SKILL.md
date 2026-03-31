@@ -146,8 +146,8 @@ export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 | Backend | When to Use |
 |---------|------------|
 | **MoRI** | Default for AMD disagg — validated, best performance |
-| **RIXL + DRAM staging** | When MoRI unavailable; uses `nixl_rocm_staging.py` |
-| **Mooncake + ROCm patch** | After applying `patches/mooncake_rocm_rdma.patch` |
+| **RIXL + DRAM staging** | `SGLANG_NIXL_ROCM_STAGING=1`; monkey-patch, zero source changes |
+| **Mooncake RDMA** | `bash scripts/patch_mooncake_rocm.sh` — patch + rebuild in container |
 | **TCP** | Fallback; no RDMA hardware needed |
 
 ### Ionic Subnet Matching
