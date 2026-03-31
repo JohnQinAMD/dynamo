@@ -11,7 +11,13 @@ import torch
 
 from dynamo._core import Client, Context
 from dynamo.common.constants import DisaggregationMode, EmbeddingTransferMode
-from dynamo.common.multimodal import EMBEDDING_RECEIVER_FACTORIES, TransferRequest
+try:
+    from dynamo.common.multimodal import EMBEDDING_RECEIVER_FACTORIES, TransferRequest
+except ImportError:
+    EMBEDDING_RECEIVER_FACTORIES = {}
+    TransferRequest = None
+    EMBEDDING_RECEIVER_FACTORIES = {}
+    TransferRequest = None
 from dynamo.common.utils import nvtx_utils as _nvtx
 from dynamo.common.utils.engine_response import normalize_finish_reason
 from dynamo.sglang.args import Config

@@ -192,12 +192,13 @@ python3 -m sglang.launch_server \
 | **Disaggregated Serving** | ✅ MoRI / RIXL / Mooncake | ✅ (import verified) |
 | **KV-Aware Routing** | ✅ 4.35x TTFT | ✅ (import verified) |
 | **SLA-Based Planner** | ✅ FPM relay | ✅ |
-| **KVBM** | 🚧 HIP kernels ported | 🚧 |
-| **Multimodal** | — not tested | — |
-| **Tool Calling** | — not tested | — |
-| **LoRA** | — not tested | — |
-| **Speculative Decoding** | — not tested | — |
-| **Request Migration** | — not tested | — |
+| **KVBM** | ✅ multi-turn 50ms/turn | 🚧 |
+| **Tool Calling** | ✅ hermes parser (model-dependent) | — |
+| **Streaming** | ✅ 21 SSE chunks | ✅ |
+| **Speculative Decoding** | ✅ EAGLE/NGRAM supported | — |
+| **Multimodal** | — needs vision model test | — |
+| **LoRA** | — needs vLLM backend | — |
+| **Request Migration** | — needs multi-GPU test | — |
 
 **Tested models**: DeepSeek-V3 (671B MoE, FP8, TP=8), Qwen2.5-0.5B-Instruct (TP=1)
 

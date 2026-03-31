@@ -6,7 +6,10 @@ from typing import Any, List, Literal, Optional, Tuple, Union
 from pydantic import BaseModel, ConfigDict, Field
 from sglang.srt.entrypoints.openai.protocol import ChatCompletionRequest
 
-from dynamo.common.multimodal import TransferRequest
+try:
+    from dynamo.common.multimodal import TransferRequest
+except ImportError:
+    TransferRequest = None
 
 TokenIdType = int
 

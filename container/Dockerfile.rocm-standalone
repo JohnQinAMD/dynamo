@@ -1,0 +1,41 @@
+# Dynamo ROCm standalone — from pytorch base, general purpose
+FROM rocm/pytorch:latest
+
+RUN apt-get update && apt-get install -y build-essential pkg-config libclang-dev \
+    protobuf-compiler curl wget && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+COPY . /opt/dynamo
+WORKDIR /opt/dynamo
+
+RUN python3 -m venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+RUN pip install maturin patchelf && \
+    export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib && \
+    export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)" && \
+    cd lib/bindings/python && maturin develop --release && \
+    cd /opt/dynamo && pip install -e .
+
+RUN pip install --quiet \
+    pytest pytest-benchmark pytest-httpserver pytest-asyncio \
+    pytest-timeout nats-py boto3 kubernetes_asyncio
+
+RUN wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.21-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
+    mkdir -p /usr/local/bin/etcd-dir && \
+    tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd-dir --strip-components=1 && \
+    ln -sf /usr/local/bin/etcd-dir/etcd /usr/local/bin/etcd && \
+    ln -sf /usr/local/bin/etcd-dir/etcdctl /usr/local/bin/etcdctl && \
+    rm /tmp/etcd.tar.gz
+
+RUN wget -q https://github.com/nats-io/nats-server/releases/download/v2.10.28/nats-server-v2.10.28-amd64.deb -O /tmp/nats.deb && \
+    dpkg -i /tmp/nats.deb && rm /tmp/nats.deb
+
+RUN python3 -c "from dynamo.llm import ModelType, MockEngineArgs; print('dynamo.llm OK')"
+
+ENV SGLANG_AITER_MLA_PERSIST=False
+ENV RCCL_MSCCL_ENABLE=0
+WORKDIR /opt/dynamo
