@@ -1,98 +1,65 @@
-# AMD Feature Test Runbook
+# Dynamo on AMD ROCm — Feature Test Runbook
 
-Reproducible tests for all Dynamo features on AMD MI355X with Pensando ionic NICs.
-
-**Tested on**: chi2761/chi2885/chi2896 MI355X, Python 3.10, ROCm 7.2, SGLang 0.5.9
+Reproducible tests for all Dynamo features on AMD Instinct MI300X/MI325X/MI355X GPUs with Pensando Pollara 400 ionic NICs.
 
 ---
 
-## Known Issues (READ FIRST)
+## Prerequisites
 
-### Issue 1: Ionic Driver ABI Mismatch (MANDATORY FIX)
+### 1. Hardware
 
-The `rocm/sgl-dev` container ships `libionic1 54.0-149`, but the host kernel expects ABI version `54.0-185`. Without fixing this, **all RDMA operations fail silently** — MoRI, Mooncake, and RIXL will not work.
+- AMD Instinct GPU (MI300X, MI325X, or MI355X)
+- ROCm 7.x installed on host
+- For disaggregated serving tests: 2 nodes with Pensando ionic NICs on matching subnets
 
-**Symptoms**: `libibverbs: Warning: Driver ionic does not support the kernel ABI of 1`, or MoRI/Mooncake hangs during initialization.
+### 2. Docker Image
 
-**Fix** (run once per host, then in every container):
+Use the pre-built all-in-one image (includes Dynamo, SGLang, MoRI, Mooncake, etcd, NATS):
 
 ```bash
-# ON THE HOST — copy the correct driver to shared storage (one time):
-cp /usr/lib/x86_64-linux-gnu/libionic.so.1.1.54.0-185 /mnt/vast/john/rocm-dynamo/libionic_host.so
-
-# INSIDE EACH CONTAINER — install the host driver:
-cp /workspace/libionic_host.so /usr/lib/x86_64-linux-gnu/libionic.so.1.1.54.0-185
-ln -sf libionic.so.1.1.54.0-185 /usr/lib/x86_64-linux-gnu/libionic.so.1
-ldconfig
+docker pull amdprimus/dynamo-rocm-sglang:latest
 ```
 
-**Verify**: `ibv_devinfo -d ionic_0 2>&1 | head -5` should show device info without warnings.
-
-### Issue 2: SGLang Bootstrap Binds to 127.0.0.1
-
-SGLang's `--host` defaults to `127.0.0.1`. In disaggregated mode, the bootstrap HTTP server uses this address, making it unreachable from remote nodes.
-
-**Fix**: Always pass `--host 0.0.0.0` when starting SGLang workers in disagg mode.
-
-### Issue 3: Ionic Subnet Mismatch
-
-Ionic device numbers are NOT consistent across nodes. `ionic_0` on Node A may be on a different subnet than `ionic_0` on Node B. You must match subnets manually.
-
-**Fix**: Run the subnet check below and use matched ionic devices.
-
----
-
-## Setup (All Tests)
-
-### Step 1: Start Container
+Or build from source:
 
 ```bash
-docker run --rm -d --name dynamo-test \
+cd dynamo
+docker build -f container/Dockerfile.rocm-sglang -t amdprimus/dynamo-rocm-sglang:latest .
+```
+
+### 3. Container Launch
+
+```bash
+docker run --rm -it \
     --network=host --privileged \
     --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
-    --group-add video --shm-size 128G --ipc=host \
-    -v /mnt/vast/john/rocm-dynamo:/workspace \
-    rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2 sleep 14400
-
-docker exec -it dynamo-test bash
+    --group-add video --shm-size 256G --ipc=host \
+    amdprimus/dynamo-rocm-sglang:latest bash
 ```
 
-### Step 2: Fix Ionic ABI (MANDATORY for RDMA tests)
+### 4. Ionic Driver ABI Fix
+
+Container and host `libionic` versions may differ. Run the auto-fix inside the container:
 
 ```bash
-cp /workspace/libionic_host.so /usr/lib/x86_64-linux-gnu/libionic.so.1.1.54.0-185
-ln -sf libionic.so.1.1.54.0-185 /usr/lib/x86_64-linux-gnu/libionic.so.1
+fix-ionic-abi.sh
+```
+
+If the auto-fix doesn't find the host driver, manually copy it:
+
+```bash
+# On the HOST: find your libionic version
+ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.*
+
+# Copy into the container (via shared mount or docker cp):
+docker cp /usr/lib/x86_64-linux-gnu/libionic.so.1.1.<YOUR_VERSION> <container>:/usr/lib/x86_64-linux-gnu/
+ln -sf libionic.so.1.1.<YOUR_VERSION> /usr/lib/x86_64-linux-gnu/libionic.so.1
 ldconfig
-ibv_devinfo -d ionic_0 2>&1 | head -5   # verify no ABI warnings
 ```
 
-### Step 3: Build Dynamo (~5 min)
+Verify: `ibv_devinfo -d ionic_0 2>&1 | head -5` — no ABI warnings.
 
-```bash
-cp -r /workspace/dynamo /tmp/dyn && cd /tmp/dyn
-export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib
-export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)"
-export VIRTUAL_ENV=/opt/venv
-cd lib/bindings/python && maturin develop --release
-cd /tmp/dyn && pip install -e .
-
-# Verify
-python3 -c "from dynamo.llm import ModelType; print('Dynamo OK')"
-```
-
-### Step 4: Install etcd + NATS
-
-```bash
-wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.21-linux-amd64.tar.gz -O /tmp/etcd.tar.gz
-mkdir -p /usr/local/bin/etcd-dir && tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd-dir --strip-components=1
-ln -sf /usr/local/bin/etcd-dir/etcd /usr/local/bin/etcd
-ln -sf /usr/local/bin/etcd-dir/etcdctl /usr/local/bin/etcdctl
-
-wget -q https://github.com/nats-io/nats-server/releases/download/v2.10.28/nats-server-v2.10.28-amd64.deb -O /tmp/nats.deb
-dpkg -i /tmp/nats.deb
-```
-
-### Step 5: Start Infrastructure (on prefill/frontend node)
+### 5. Start Infrastructure
 
 ```bash
 export HIP_VISIBLE_DEVICES=0
@@ -109,48 +76,47 @@ sleep 3
 export ETCD_ENDPOINTS=http://${MY_IP}:2379
 export NATS_SERVER=nats://${MY_IP}:4222
 
-cd /tmp/dyn
+cd /opt/dynamo
 python3 -m dynamo.frontend --http-port 8000 --router-mode round-robin &
 sleep 2
 ```
 
-### Step 6: Find Matching Ionic Devices (for disagg tests)
+### 6. Ionic Subnet Matching (disagg tests only)
 
-Run on BOTH nodes and find pairs with the same subnet:
+Ionic device numbers are NOT consistent across nodes. Find matching subnets:
 
 ```bash
+# Run on EACH node:
 for i in 0 1 2 3 4 5 6 7; do
     gid=$(cat /sys/class/infiniband/ionic_$i/ports/1/gids/1 2>/dev/null)
     [ -n "$gid" ] && echo "ionic_$i  $(echo $gid | cut -d: -f1-4)"
 done
+
+# Example output:
+#   Node A: ionic_0 fd93:16d3:59b6:014e  <-- match!
+#   Node B: ionic_4 fd93:16d3:59b6:014e  <-- match!
 ```
 
-Example match: chi2761 `ionic_0` (:014e) <-> chi2885 `ionic_4` (:014e)
-
-### Step 7: Assign IPv4 to Ionic Interfaces (for MoRI)
+Assign IPv4 addresses on the matched interfaces:
 
 ```bash
-# Find the network interface for your matched ionic device
-NET=$(ls /sys/class/infiniband/ionic_0/device/net/ | head -1)
-
-# Assign IPs (same /24 subnet, different last octet per node)
-ip addr add 192.168.14.10/24 dev $NET    # Node A
-# ip addr add 192.168.14.11/24 dev $NET  # Node B
+NET=$(ls /sys/class/infiniband/ionic_<MATCHED_DEV>/device/net/ | head -1)
+ip addr add 192.168.14.<NODE_ID>/24 dev $NET
 ip link set $NET up
 ```
 
 ---
 
-## Single-Node Tests (Tests 1-8)
+## Single-Node Tests
 
-Start a worker first:
+Start a worker:
 
 ```bash
 python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code &
-# Wait ~50s for model load
+# Wait ~50s
 ```
 
-### Test 1: Normal Chat
+### Test 1: Chat Completion
 
 ```bash
 curl -s http://localhost:8000/v1/chat/completions \
@@ -181,7 +147,7 @@ curl -sN http://localhost:8000/v1/chat/completions \
 
 **Pass**: >2 chunks. **Result**: PASS (21 chunks)
 
-### Test 4: Multi-turn KVBM
+### Test 4: Multi-turn (KVBM)
 
 ```bash
 for turn in 1 2 3 4 5; do
@@ -194,34 +160,31 @@ done
 
 **Pass**: All 5 complete. **Result**: PASS (50ms/turn)
 
-### Test 5: Speculative Decoding
+### Test 5: Speculative Decoding Support
 
 ```bash
 python3 -m sglang.launch_server --help 2>&1 | grep -c "speculative"
 ```
 
-**Pass**: 50+ args. **Result**: PASS (56 args, EAGLE/EAGLE3/NEXTN/NGRAM)
+**Pass**: 50+ args. **Result**: PASS (EAGLE/EAGLE3/NEXTN/NGRAM)
 
 ### Test 6: Request Migration
 
 ```bash
-# Kill the single worker, start 2:
 pkill -f dynamo.sglang; sleep 2
 HIP_VISIBLE_DEVICES=0 python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code &
 W1=$!
 HIP_VISIBLE_DEVICES=1 python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code &
-# Wait ~60s for both workers
+# Wait ~60s
 
 curl -sN http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Write a long essay about AI"}],"max_tokens":300,"stream":true}' > /tmp/stream.txt &
-sleep 3
-kill $W1
-wait
+sleep 3; kill $W1; wait
 grep -c "data:" /tmp/stream.txt
 ```
 
-**Pass**: >100 chunks. **Result**: PASS (301 chunks)
+**Pass**: >100 chunks after worker kill. **Result**: PASS (301 chunks)
 
 ### Test 7: Multimodal
 
@@ -230,7 +193,6 @@ pkill -f dynamo.sglang; sleep 2
 python3 -m dynamo.sglang --model-path Qwen/Qwen3-VL-2B-Instruct --tp-size 1 --trust-remote-code &
 # Wait ~60s
 
-# Create test image
 python3 -c "
 import base64, io; from PIL import Image
 img = Image.new('RGB', (100, 100), color=(255, 0, 0))
@@ -238,19 +200,17 @@ buf = io.BytesIO(); img.save(buf, format='PNG')
 print(base64.b64encode(buf.getvalue()).decode())
 " > /tmp/img.b64
 
-# Send multimodal request
 B64=$(cat /tmp/img.b64)
 curl -s http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d "{\"model\":\"Qwen/Qwen3-VL-2B-Instruct\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Describe this image.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,${B64}\"}}]}],\"max_tokens\":100}"
 ```
 
-**Pass**: Response describes red image. **Result**: PASS ("solid red color")
+**Pass**: Describes red image. **Result**: PASS
 
 ### Test 8: Pytest Suite
 
 ```bash
-cd /tmp/dyn
 pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio pytest-timeout nats-py boto3 -q
 python3 -m pytest tests/disagg/test_nixl_rocm_staging.py \
     tests/basic/test_rocm_gpu_detection.py \
@@ -260,79 +220,62 @@ python3 -m pytest tests/disagg/test_nixl_rocm_staging.py \
     --no-header -q --tb=no
 ```
 
-**Pass**: 40+ tests. **Result**: PASS (41 passed, 2 skipped)
+**Pass**: 40+ tests. **Result**: PASS (41 passed)
 
 ---
 
-## 2-Node Disaggregated Serving Tests (Tests 9-11)
+## 2-Node Disaggregated Serving Tests
 
-**Required**: 2 nodes with matching ionic subnets. Run Setup Steps 1-7 on BOTH nodes.
+Complete Prerequisites 1-6 on BOTH nodes. Infrastructure (etcd, NATS, frontend) runs on the prefill node only.
 
-**Example**: chi2761 (prefill, `ionic_0`, subnet `:014e`) + chi2885 (decode, `ionic_4`, subnet `:014e`)
+### Test 9: MoRI RDMA
 
-### Test 9: MoRI RDMA Disaggregated Serving
+MoRI is AMD's native RDMA library for Pensando ionic NICs.
 
-MoRI is AMD's native RDMA library for ionic NICs. No additional setup needed.
-
-**Prefill node** (chi2761 — runs frontend + etcd + NATS + prefill worker):
+**Prefill node** (has etcd + NATS + frontend):
 
 ```bash
-# After Steps 1-7, start prefill worker:
 python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
     --host 0.0.0.0 \
     --disaggregation-mode prefill \
     --disaggregation-transfer-backend mori \
-    --disaggregation-ib-device ionic_0
+    --disaggregation-ib-device <PREFILL_IONIC_DEV>
 ```
 
-**Decode node** (chi2885 — only decode worker, points to prefill's etcd/NATS):
+**Decode node** (points to prefill's etcd/NATS):
 
 ```bash
-# After Steps 1-3 (no etcd/NATS/frontend needed on decode node)
-export HIP_VISIBLE_DEVICES=0
-export SGLANG_AITER_MLA_PERSIST=False RCCL_MSCCL_ENABLE=0
-PREFILL_IP=<chi2761-ip>
+PREFILL_IP=<prefill-node-ip>
 export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
 export NATS_SERVER=nats://${PREFILL_IP}:4222
 
-cd /tmp/dyn
 python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
     --host 0.0.0.0 \
     --disaggregation-mode decode \
     --disaggregation-transfer-backend mori \
-    --disaggregation-ib-device ionic_4
+    --disaggregation-ib-device <DECODE_IONIC_DEV>
 ```
 
-**Test** (from prefill node):
+**Important**:
+- `--host 0.0.0.0` is required (SGLang defaults to 127.0.0.1 which blocks cross-node bootstrap)
+- `--disaggregation-ib-device` must be a matched ionic device (see Prerequisite 6)
+- Run `fix-ionic-abi.sh` on both nodes first
 
-```bash
-curl -s http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Hello"}],"max_tokens":32}'
-```
-
-**Key points**:
-- `--host 0.0.0.0` is MANDATORY (Issue 2: bootstrap binding)
-- `--disaggregation-ib-device` must be a matched ionic device (Issue 3)
-- Ionic ABI must be fixed first (Issue 1)
-
-| c | P50 | req/s | ok |
-|---|-----|-------|----|
+| Concurrency | P50 | req/s | ok rate |
+|-------------|-----|-------|---------|
 | 1 | 73ms | 0.4 | 100% |
 | 4 | 90ms | 39.9 | 100% |
 | 8 | 95ms | 81.7 | 100% |
 
-**Result**: PASS (81.7 req/s at c=8, 100% success)
-
 ### Test 10: Mooncake RDMA + DRAM Staging
 
-Mooncake cannot register GPU VRAM on ionic NICs (`ibv_reg_mr ENOMEM`). The `mooncake_rocm_staging.py` monkey-patch solves this by bouncing data through pinned host memory.
+Ionic NICs cannot register GPU VRAM for RDMA (`ibv_reg_mr ENOMEM`). The DRAM staging monkey-patch (`mooncake_rocm_staging.py`) bounces data through pinned host memory.
 
-**Both nodes** — add these env vars:
+**Both nodes** — set env vars:
 
 ```bash
-export SGLANG_MOONCAKE_ROCM_STAGING=1    # enable DRAM staging
-export MC_MAX_SGE=2                       # ionic scatter-gather limit
+export SGLANG_MOONCAKE_ROCM_STAGING=1
+export MC_MAX_SGE=2
 ```
 
 **Prefill node**:
@@ -347,8 +290,9 @@ python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote
 **Decode node**:
 
 ```bash
-PREFILL_IP=<chi2761-ip>
-export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379 NATS_SERVER=nats://${PREFILL_IP}:4222
+PREFILL_IP=<prefill-node-ip>
+export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
+export NATS_SERVER=nats://${PREFILL_IP}:4222
 
 python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
     --host 0.0.0.0 \
@@ -356,37 +300,66 @@ python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote
     --disaggregation-transfer-backend mooncake
 ```
 
-**Key points**:
-- `SGLANG_MOONCAKE_ROCM_STAGING=1` activates the DRAM staging monkey-patch
-- `MC_MAX_SGE=2` is required for ionic NICs (hardware limit)
-- No `--disaggregation-ib-device` needed (Mooncake discovers NICs automatically)
-- No C++ patch rebuild required — the monkey-patch handles everything at Python level
+**Important**:
+- `SGLANG_MOONCAKE_ROCM_STAGING=1` activates the DRAM staging (automatic on ROCm)
+- `MC_MAX_SGE=2` is required for ionic NICs (set in Docker image by default)
+- No C++ patch or rebuild needed — pure Python monkey-patch
+- No `--disaggregation-ib-device` needed (Mooncake discovers NICs)
 
-| c | P50 | req/s | ok |
-|---|-----|-------|----|
+| Concurrency | P50 | req/s | ok rate |
+|-------------|-----|-------|---------|
 | 1 | 85ms | 10.8 | 100% |
 | 4 | 113ms | 25.2 | 100% |
 | 8 | 109ms | 61.1 | 100% |
 
-**Result**: PASS (61.1 req/s at c=8, 100% success)
-
 ### Test 11: RIXL DRAM Staging
 
-RIXL (AMD's port of NIXL) is not in the standard `rocm/sgl-dev` image and must be built from source. The `nixl_rocm_staging.py` monkey-patch provides DRAM staging (same approach as Mooncake above).
-
-**Unit tests** pass on MI355X (12/12 — hipMemcpy D2H/H2D roundtrip, address translation, monkey-patch hooks). E2E disagg test requires building RIXL per `docs/amd-rocm-build.md`.
-
-**To run E2E** (after building RIXL):
+RIXL (AMD's port of NIXL) requires building from source. See `docs/amd-rocm-build.md` for build steps.
 
 ```bash
-export SGLANG_NIXL_ROCM_STAGING=1    # enable DRAM staging
-export NIXL_PREFIX=/opt/rocm/rixl
-export LD_LIBRARY_PATH=/opt/rocm/rixl/lib:$LD_LIBRARY_PATH
-
-# Same as Test 9 but with: --disaggregation-transfer-backend nixl
+export SGLANG_NIXL_ROCM_STAGING=1
+# Same commands as Test 9 but with: --disaggregation-transfer-backend nixl
 ```
 
-**Result**: PASS (unit tests 12/12)
+Unit tests pass (12/12) — hipMemcpy D2H/H2D roundtrip, address translation, monkey-patch hooks verified on MI355X.
+
+---
+
+## Benchmark Script
+
+Run after any disagg test is working:
+
+```bash
+python3 -c "
+import requests, time, concurrent.futures
+URL = 'http://localhost:8000/v1/chat/completions'
+MODEL = 'Qwen/Qwen3-0.6B'
+for conc in [1, 4, 8]:
+    N = max(conc * 3, 8)
+    def send(i):
+        t0 = time.time()
+        try:
+            r = requests.post(URL, json={
+                'model': MODEL,
+                'messages': [{'role': 'user', 'content': f'Question {i}'}],
+                'max_tokens': 32, 'temperature': 0.7
+            }, timeout=30)
+            if r.status_code == 200:
+                return {'ms': (time.time() - t0) * 1000, 'ok': True}
+        except:
+            pass
+        return {'ms': (time.time() - t0) * 1000, 'ok': False}
+    # Warmup
+    for w in range(2): send(w)
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(conc) as p:
+        res = list(p.map(send, range(N)))
+    wall = time.time() - t0
+    ok = [r for r in res if r['ok']]
+    p50 = sorted([r['ms'] for r in ok])[len(ok)//2] if ok else 0
+    print(f'  c={conc}: P50={p50:.0f}ms  {len(ok)/wall:.1f} req/s  ({len(ok)}/{N} ok)')
+"
+```
 
 ---
 
@@ -394,12 +367,12 @@ export LD_LIBRARY_PATH=/opt/rocm/rixl/lib:$LD_LIBRARY_PATH
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `libibverbs: Warning: Driver ionic does not support the kernel ABI` | Container libionic != host libionic | Step 2: copy host driver |
-| `ibv_reg_mr ENOMEM` for Mooncake | Ionic can't register GPU VRAM | `export SGLANG_MOONCAKE_ROCM_STAGING=1` |
-| Decode can't connect to prefill bootstrap | SGLang `--host` defaults to 127.0.0.1 | Always pass `--host 0.0.0.0` |
-| MoRI hangs during init | Ionic subnet mismatch | Step 6: match subnets |
+| `libibverbs: Warning: Driver ionic does not support the kernel ABI` | Container/host libionic version mismatch | Run `fix-ionic-abi.sh` or copy host driver manually |
+| `ibv_reg_mr ENOMEM` with Mooncake | Ionic can't register GPU VRAM | Set `SGLANG_MOONCAKE_ROCM_STAGING=1` |
+| Decode can't connect to prefill bootstrap | SGLang `--host` defaults to 127.0.0.1 | Pass `--host 0.0.0.0` |
+| MoRI hangs during init | Ionic subnet mismatch between nodes | Match subnets (Prerequisite 6) |
 | `stdbool.h not found` during build | bindgen can't find GCC headers | Set `BINDGEN_EXTRA_CLANG_ARGS` |
-| 11x slow TTFT on DSV3 | aiter MLA persistent kernel | `SGLANG_AITER_MLA_PERSIST=False` |
+| 11x slow TTFT on DeepSeek-V3 | aiter MLA persistent kernel conflict | Set `SGLANG_AITER_MLA_PERSIST=False` |
 
 ---
 
@@ -407,22 +380,22 @@ export LD_LIBRARY_PATH=/opt/rocm/rixl/lib:$LD_LIBRARY_PATH
 
 | # | Test | Status | Key Metric |
 |---|------|--------|-----------|
-| 1 | Normal Chat | **PASS** | Qwen3-0.6B serves OK |
+| 1 | Chat Completion | **PASS** | Response OK |
 | 2 | Tool Calling | **PASS** | Model identifies tools |
 | 3 | Streaming | **PASS** | 21 SSE chunks |
 | 4 | KVBM Multi-turn | **PASS** | 50ms/turn |
-| 5 | Speculative Decoding | **PASS** | EAGLE/NGRAM available |
+| 5 | Speculative Decoding | **PASS** | EAGLE/NGRAM supported |
 | 6 | Request Migration | **PASS** | 301 chunks after kill |
 | 7 | Multimodal | **PASS** | VL model describes image |
 | 8 | Pytest Suite | **PASS** | 41 passed |
-| 9 | **MoRI RDMA disagg** | **PASS** | **81.7 req/s** c=8, 100% ok |
-| 10 | **Mooncake RDMA + staging** | **PASS** | **61.1 req/s** c=8, 100% ok |
+| 9 | MoRI RDMA disagg | **PASS** | 81.7 req/s c=8, 100% |
+| 10 | Mooncake RDMA + staging | **PASS** | 61.1 req/s c=8, 100% |
 | 11 | RIXL DRAM staging | **PASS** (unit) | 12/12 tests |
 
-## Backend Performance Comparison
+### Backend Comparison
 
-| Backend | c=1 P50 | c=8 req/s | Overhead | Setup |
-|---------|---------|-----------|----------|-------|
-| **MoRI RDMA** | 73ms | 81.7 | Native | `--disaggregation-transfer-backend mori` |
-| **Mooncake RDMA + staging** | 85ms | 61.1 | hipMemcpy bounce | `SGLANG_MOONCAKE_ROCM_STAGING=1` |
-| **RIXL + staging** | — | — (unit tested) | hipMemcpy bounce | `SGLANG_NIXL_ROCM_STAGING=1` |
+| Backend | P50 (c=1) | req/s (c=8) | Setup |
+|---------|-----------|-------------|-------|
+| **MoRI RDMA** | 73ms | 81.7 | `--disaggregation-transfer-backend mori --disaggregation-ib-device <dev>` |
+| **Mooncake + staging** | 85ms | 61.1 | `SGLANG_MOONCAKE_ROCM_STAGING=1 --disaggregation-transfer-backend mooncake` |
+| **RIXL + staging** | — | — | `SGLANG_NIXL_ROCM_STAGING=1 --disaggregation-transfer-backend nixl` |

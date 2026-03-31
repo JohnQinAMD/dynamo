@@ -1,20 +1,35 @@
-# Dynamo ROCm + SGLang — pre-built image with all dependencies
+# Dynamo ROCm + SGLang — all-in-one image for AMD MI300X/MI355X
+#
+# Includes: Dynamo (Rust + Python), SGLang, MoRI, Mooncake, etcd, NATS,
+#           ionic ABI auto-fix, DRAM staging patches, test dependencies
+#
+# Build:
+#   docker build -f container/Dockerfile.rocm-sglang -t amdprimus/dynamo-rocm-sglang:latest .
+#
+# Run:
+#   docker run --network=host --privileged \
+#       --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
+#       --group-add video --shm-size 256G --ipc=host \
+#       amdprimus/dynamo-rocm-sglang:latest bash
+
 FROM rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
 
+# Build Dynamo Rust bindings (abi3 — works on Python 3.10+)
 COPY . /opt/dynamo
 WORKDIR /opt/dynamo
-
 RUN export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib && \
     export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)" && \
     export VIRTUAL_ENV=/opt/venv && \
     cd lib/bindings/python && maturin develop --release && \
     cd /opt/dynamo && pip install -e .
 
+# Test + runtime dependencies
 RUN pip install --quiet \
     pytest pytest-benchmark pytest-httpserver pytest-asyncio \
     pytest-timeout nats-py boto3 prophet kubernetes_asyncio \
     prometheus_api_client filterpy pmdarima kr8s
 
+# etcd (service discovery)
 RUN wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.21-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
     mkdir -p /usr/local/bin/etcd-dir && \
     tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd-dir --strip-components=1 && \
@@ -22,13 +37,41 @@ RUN wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.
     ln -sf /usr/local/bin/etcd-dir/etcdctl /usr/local/bin/etcdctl && \
     rm /tmp/etcd.tar.gz
 
+# NATS (messaging)
 RUN wget -q https://github.com/nats-io/nats-server/releases/download/v2.10.28/nats-server-v2.10.28-amd64.deb -O /tmp/nats.deb && \
     dpkg -i /tmp/nats.deb && rm /tmp/nats.deb
 
+# Ionic ABI auto-fix entrypoint script
+RUN cat > /usr/local/bin/fix-ionic-abi.sh << 'FIXSCRIPT'
+#!/bin/bash
+# Auto-detect and fix ionic driver ABI mismatch between container and host.
+# The container ships libionic1 54.0-149 but host kernels may have newer versions.
+# This script copies the host's libionic into the container if a mismatch is detected.
+HOST_LIB=$(find /usr/lib/x86_64-linux-gnu -name 'libionic.so.1.1.*' 2>/dev/null | sort -V | tail -1)
+CONTAINER_LIB=$(readlink -f /usr/lib/x86_64-linux-gnu/libionic.so.1 2>/dev/null)
+if [ -n "$HOST_LIB" ] && [ "$HOST_LIB" != "$CONTAINER_LIB" ]; then
+    ln -sf "$(basename $HOST_LIB)" /usr/lib/x86_64-linux-gnu/libionic.so.1
+    ldconfig
+    echo "[ionic-abi] Fixed: $(basename $HOST_LIB)"
+elif [ -f /workspace/libionic_host.so ]; then
+    VER=$(strings /workspace/libionic_host.so | grep -o '54\.0-[0-9]*' | head -1)
+    cp /workspace/libionic_host.so "/usr/lib/x86_64-linux-gnu/libionic.so.1.1.${VER:-54.0-host}"
+    ln -sf "libionic.so.1.1.${VER:-54.0-host}" /usr/lib/x86_64-linux-gnu/libionic.so.1
+    ldconfig
+    echo "[ionic-abi] Fixed from /workspace/libionic_host.so"
+else
+    echo "[ionic-abi] No fix needed or host driver not found"
+fi
+FIXSCRIPT
+RUN chmod +x /usr/local/bin/fix-ionic-abi.sh
+
+# Verify build
 RUN python3 -c "from dynamo.llm import ModelType, MockEngineArgs; print('dynamo.llm OK')" && \
+    python3 -c "from mooncake.engine import TransferEngine; print('mooncake OK')" && \
     etcd --version | head -1 && \
     nats-server --version
 
 ENV SGLANG_AITER_MLA_PERSIST=False
 ENV RCCL_MSCCL_ENABLE=0
+ENV MC_MAX_SGE=2
 WORKDIR /opt/dynamo
