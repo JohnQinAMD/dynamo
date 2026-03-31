@@ -237,16 +237,29 @@ def patch_nixl_for_rocm():
     # ---- 2. register_buffer_to_engine ---------------------------------------
     def _patched_register(self):
         staging: _RocmDramStaging = self._rocm_staging
+        MAX_MR_SIZE = 1024 * 1024 * 1024  # 1GB max per MR (ionic limit)
 
-        # KV buffers → DRAM staging
-        kv_addrs = []
-        for gpu_ptr, data_len in zip(
-            self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
-        ):
-            host_ptr = staging.create(gpu_ptr, data_len)
-            kv_addrs.append((host_ptr, data_len, 0, ""))
-        self.kv_descs = self.agent.register_memory(kv_addrs, "DRAM")
-        logger.debug("ROCm staging: registered %d KV buffers as DRAM", len(kv_addrs))
+        def _chunk_register(agent, gpu_ptrs, data_lens, staging_obj, mem_type="DRAM"):
+            """Register buffers in chunks to avoid ionic ibv_reg_mr ENOMEM for large buffers."""
+            all_addrs = []
+            for gpu_ptr, data_len in zip(gpu_ptrs, data_lens):
+                host_ptr = staging_obj.create(gpu_ptr, data_len)
+                if data_len <= MAX_MR_SIZE:
+                    all_addrs.append((host_ptr, data_len, 0, ""))
+                else:
+                    offset = 0
+                    while offset < data_len:
+                        chunk = min(MAX_MR_SIZE, data_len - offset)
+                        all_addrs.append((host_ptr + offset, chunk, 0, ""))
+                        offset += chunk
+            descs = agent.register_memory(all_addrs, mem_type)
+            return descs
+
+        # KV buffers → DRAM staging (chunked for ionic)
+        self.kv_descs = _chunk_register(
+            self.agent, self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens, staging
+        )
+        logger.debug("ROCm staging: registered %d KV buffer chunks as DRAM", len(self.kv_args.kv_data_ptrs))
         if not self.kv_descs:
             raise Exception("NIXL DRAM registration failed for KV tensors")
 
@@ -263,12 +276,9 @@ def patch_nixl_for_rocm():
         # State buffers → DRAM staging (if present)
         if self.kv_args.state_data_ptrs and self.kv_args.state_data_lens:
             state_addrs = []
-            for gpu_ptr, data_len in zip(
-                self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
-            ):
-                host_ptr = staging.create(gpu_ptr, data_len)
-                state_addrs.append((host_ptr, data_len, 0, ""))
-            self.state_descs = self.agent.register_memory(state_addrs, "DRAM")
+            self.state_descs = _chunk_register(
+                self.agent, self.kv_args.state_data_ptrs, self.kv_args.state_data_lens, staging
+            )
             if not self.state_descs:
                 raise Exception("NIXL DRAM registration failed for state tensors")
 
