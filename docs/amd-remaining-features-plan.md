@@ -80,19 +80,19 @@ kubectl get crd | grep dynamo
 | 4 | Disagg P/D (MoRI) | ✅ | ✅ Working | — | — |
 | 5 | Local Planner | ✅ | ✅ Validated (virtual + K8s) | — | — |
 | 6 | SGLang FPM Relay | N/A (AMD-new) | ✅ Working | — | — |
-| 7 | **Global Router** | ✅ | ❌ Not tested | Need test + validate | P1 |
-| 8 | **Global Planner** | ✅ | ❌ Not tested | Need test + validate | P1 |
-| 9 | **Profiler / DGDR** | ✅ | ❌ Not tested | Need MI355X GPU SKU + test | P1 |
+| 7 | **Global Router** | ✅ | ⚠️ Unit tests pass (10/10) | Need E2E with SGLang | P1 |
+| 8 | **Global Planner** | ✅ | ⚠️ Unit tests pass (10/10) | Need E2E with SGLang | P1 |
+| 9 | **Profiler / DGDR** | ✅ | ❌ Skipped (needs aiconfigurator) | Need MI355X GPU SKU + test | P1 |
 | 10 | **Multimodal (Image)** | ✅ | ❌ Not tested | SGLang VL models on ROCm | P2 |
 | 11 | **Multimodal E/P/D** | ✅ | ❌ Not tested | Encode/Prefill/Decode disagg | P2 |
 | 12 | **Multimodal (Video)** | ✅ (preview) | ❌ Not tested | FastVideo / diffusion | P3 |
-| 13 | **Fault Tolerance — Migration** | ✅ | ❌ Not tested on ROCm | SGLang request migration | P1 |
-| 14 | **Fault Tolerance — Cancellation** | ✅ | ❌ Not tested on ROCm | SGLang request cancel | P1 |
+| 13 | **Fault Tolerance — Migration** | ✅ | ❌ Disagg blocked (nixl) | SGLang request migration | P1 |
+| 14 | **Fault Tolerance — Cancellation** | ✅ | ⚠️ Agg skipped, disagg blocked (nixl) | Need nixl/RIXL in container | P1 |
 | 15 | **Fault Tolerance — Health Check** | ✅ | ❌ Not tested on ROCm | Worker health monitoring | P2 |
 | 16 | **GPU Memory Service** | ✅ | ❌ Not tested on ROCm | Sleep/wake, shadow failover | P2 |
 | 17 | **Observability — Metrics** | ✅ | ⚠️ Partial (Prometheus works) | Full metrics validation | P2 |
 | 18 | **Observability — Tracing** | ✅ | ❌ Not tested | OpenTelemetry tracing | P3 |
-| 19 | **K8s Operator — DGD deploy** | ✅ | ⚠️ CRDs deployed, no E2E | Full deploy E2E test | P1 |
+| 19 | **K8s Operator — DGD deploy** | ✅ | ⚠️ CRDs + DGD dry-run PASS, no Operator E2E | Need Operator for pod reconciliation | P1 |
 | 20 | **K8s — DGDR auto-deploy** | ✅ | ❌ Not tested | DGDR → profiler → deploy | P2 |
 | 21 | **K8s — Grove / Topology** | ✅ | ❌ Not tested | Topology-aware scheduling | P3 |
 | 22 | **K8s — Inference Gateway** | ✅ | ❌ Not tested | GAIE KV-aware routing | P3 |
