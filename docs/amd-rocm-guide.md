@@ -235,6 +235,135 @@ bash scripts/patch_mooncake_rocm.sh
 
 **Result**: MoRI achieves 7.4 req/s, 475 tok/s with DSV3 671B, 100% success rate.
 
+#### Multi-Node End-to-End Walkthrough
+
+Complete steps to run disaggregated serving across 2 MI355X nodes.
+
+**Prerequisites**: Two nodes (e.g. `chi2899`, `chi2900`) with matching ionic subnets, model on shared storage.
+
+**Step 1 — Start containers on both nodes:**
+
+```bash
+# Same command on both nodes
+docker run -d --name dynamo-worker \
+    --network=host --privileged \
+    --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
+    --group-add video --shm-size 256G --ipc=host \
+    -v /mnt/vast/john/rocm-dynamo:/workspace \
+    -v /path/to/models:/models:ro \
+    rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2 \
+    sleep 86400
+```
+
+**Step 2 — Find matching ionic devices** (run inside each container):
+
+```bash
+for i in 0 1 2 3 4 5 6 7; do
+    gid=$(cat /sys/class/infiniband/ionic_$i/ports/1/gids/1 2>/dev/null)
+    [ -n "$gid" ] && echo "ionic_$i  $(echo $gid | cut -d: -f1-4)"
+done
+# Match devices with the same subnet prefix between nodes
+# Example: chi2899 ionic_2 (:0148) <-> chi2900 ionic_0 (:0148)
+```
+
+**Step 3 — Prefill node** (e.g. `chi2899`): start etcd, NATS, frontend, prefill worker:
+
+```bash
+docker exec -it dynamo-worker bash
+
+export SGLANG_AITER_MLA_PERSIST=False
+export RCCL_MSCCL_ENABLE=0
+export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+MY_IP=$(hostname -I | awk '{print $1}')
+
+# Install etcd + NATS (if not present)
+which etcd  || { wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.21-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && mkdir -p /usr/local/bin/etcd-dir && tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd-dir --strip-components=1 && ln -sf /usr/local/bin/etcd-dir/etcd /usr/local/bin/etcd; }
+which nats-server || { wget -q https://github.com/nats-io/nats-server/releases/download/v2.10.28/nats-server-v2.10.28-amd64.deb -O /tmp/nats.deb && dpkg -i /tmp/nats.deb >/dev/null 2>&1; }
+
+# Start infrastructure
+rm -rf /tmp/default.etcd
+etcd --listen-client-urls http://0.0.0.0:2379 \
+     --advertise-client-urls http://${MY_IP}:2379 &
+nats-server -p 4222 -js --client_advertise ${MY_IP}:4222 &
+sleep 3
+
+export ETCD_ENDPOINTS="http://${MY_IP}:2379"
+export NATS_SERVER="nats://${MY_IP}:4222"
+
+# Build Dynamo (first time only)
+cp -r /workspace/dynamo /tmp/dynamo && cd /tmp/dynamo
+MODE=develop bash scripts/build_dynamo_wheel.sh
+
+# Start Frontend
+python3 -m dynamo.frontend --http-port 8000 --router-mode round-robin &
+sleep 3
+
+# Start Prefill Worker
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --attention-backend aiter \
+    --kv-cache-dtype fp8_e4m3 --cuda-graph-max-bs 16 \
+    --chunked-prefill-size 32768 --mem-fraction-static 0.80 \
+    --disaggregation-mode prefill \
+    --disaggregation-transfer-backend mori \
+    --disaggregation-ib-device ionic_2  # your matched device
+```
+
+**Step 4 — Decode node** (e.g. `chi2900`): start decode worker pointing to prefill's etcd/NATS:
+
+```bash
+docker exec -it dynamo-worker bash
+
+export SGLANG_AITER_MLA_PERSIST=False
+export RCCL_MSCCL_ENABLE=0
+export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# Point to prefill node's infrastructure
+PREFILL_IP=<chi2899-ip>
+export ETCD_ENDPOINTS="http://${PREFILL_IP}:2379"
+export NATS_SERVER="nats://${PREFILL_IP}:4222"
+
+# Build Dynamo (first time only)
+cp -r /workspace/dynamo /tmp/dynamo && cd /tmp/dynamo
+MODE=develop bash scripts/build_dynamo_wheel.sh
+
+# Start Decode Worker
+python3 -m dynamo.sglang \
+    --model-path /models/DeepSeek-V3 \
+    --tp-size 8 --attention-backend aiter \
+    --kv-cache-dtype fp8_e4m3 --cuda-graph-max-bs 16 \
+    --mem-fraction-static 0.80 \
+    --disaggregation-mode decode \
+    --disaggregation-transfer-backend mori \
+    --disaggregation-ib-device ionic_0  # your matched device
+```
+
+**Step 5 — Send requests** (from any machine):
+
+```bash
+# Single request
+curl http://<prefill-ip>:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"DeepSeek-V3","messages":[{"role":"user","content":"Hello!"}],"max_tokens":64}'
+
+# Benchmark
+python3 -m sglang.bench_serving \
+    --backend sglang \
+    --base-url http://<prefill-ip>:8000 \
+    --model DeepSeek-V3 \
+    --num-prompts 100 --request-rate 8
+```
+
+#### Quick Test with Small Model
+
+For fast validation (starts in seconds), replace the model args:
+
+```bash
+# On both nodes, use Qwen instead of DSV3:
+--model-path Qwen/Qwen2.5-0.5B-Instruct --tp-size 1
+# Remove: --kv-cache-dtype, --cuda-graph-max-bs, --chunked-prefill-size
+```
+
 ### 3.4 Dynamic Planner
 
 ```bash
