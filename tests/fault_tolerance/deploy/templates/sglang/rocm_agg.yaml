@@ -19,13 +19,6 @@ spec:
       envFromSecret: hf-token-secret
       componentType: worker
       replicas: 1
-      resources:
-        requests:
-          memory: "50Gi"
-          amd.com/gpu: "8"
-        limits:
-          memory: "256Gi"
-          amd.com/gpu: "8"
       envs:
         - name: DYN_SYSTEM_ENABLED
           value: "true"
