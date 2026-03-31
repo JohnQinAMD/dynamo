@@ -592,7 +592,32 @@ python3 -m dynamo.planner \
 
 ---
 
-## 5. Kubernetes Deployment
+## 5. Slurm Deployment
+
+Pre-built Slurm scripts in `scripts/slurm/`:
+
+```bash
+# Single node
+sbatch scripts/slurm/dynamo_standalone.slurm
+
+# 2-node KV Router
+sbatch scripts/slurm/dynamo_kv_router.slurm
+
+# 2-node disagg (MoRI RDMA)
+sbatch scripts/slurm/dynamo_disagg.slurm
+
+# 2-node disagg (RIXL DRAM staging)
+BACKEND=nixl sbatch scripts/slurm/dynamo_disagg.slurm
+
+# Quick test with small model
+MODEL=/models/Qwen2.5-0.5B-Instruct TP=1 sbatch scripts/slurm/dynamo_standalone.slurm
+```
+
+Each script auto-installs etcd/NATS, builds Dynamo, and starts the workers inside Docker containers launched by `srun`. See [scripts/slurm/README.md](../scripts/slurm/README.md) for configuration options.
+
+---
+
+## 6. Kubernetes Deployment
 
 ### Prerequisites
 
@@ -638,7 +663,7 @@ spec:
 
 ---
 
-## 6. Bug Fixes Applied
+## 7. Bug Fixes Applied
 
 | Bug | Fix | Impact |
 |-----|-----|--------|
@@ -651,7 +676,7 @@ spec:
 
 ---
 
-## 7. Performance Summary
+## 8. Performance Summary
 
 | Benchmark | Result |
 |-----------|--------|
@@ -665,7 +690,7 @@ spec:
 
 ---
 
-## 8. Repository Structure
+## 9. Repository Structure
 
 ```
 dynamo/
@@ -686,7 +711,7 @@ dynamo/
 
 ---
 
-## 9. Python Version Compatibility
+## 10. Python Version Compatibility
 
 Dynamo supports **Python 3.10, 3.11, and 3.12** via the PyO3 stable ABI (`abi3-py310`). A single Rust wheel works on all versions >= 3.10.
 
