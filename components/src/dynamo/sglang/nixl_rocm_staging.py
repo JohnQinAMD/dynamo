@@ -83,19 +83,49 @@ class _RocmDramStaging:
         self.buffers: dict[int, tuple] = {}
 
     def create(self, gpu_ptr: int, size: int) -> int:
-        """Allocate a pinned host buffer mirroring *gpu_ptr*.  Returns host ptr."""
-        import torch
-
-        t = torch.empty(size, dtype=torch.uint8, device="cpu").pin_memory()
-        host_ptr = t.data_ptr()
-        self.buffers[gpu_ptr] = (t, host_ptr, size)
+        """Record GPU buffer metadata for lazy staging. Returns a placeholder host ptr.
+        
+        In lazy mode (ionic), we don't allocate the full DRAM mirror upfront.
+        Instead, small staging regions are allocated per-transfer in get_staging_region().
+        """
+        # Store metadata only — no allocation
+        self.buffers[gpu_ptr] = (None, gpu_ptr, size)  # (tensor=None, placeholder=gpu_ptr, size)
         logger.info(
-            "ROCm DRAM staging: %d MB  GPU %s → host %s",
+            "ROCm DRAM staging: %d MB GPU %s (lazy — no allocation yet)",
             size // (1024 * 1024),
             hex(gpu_ptr),
-            hex(host_ptr),
         )
-        return host_ptr
+        return gpu_ptr  # return GPU ptr as placeholder — translate_base will map it
+
+    def get_staging_region(self, gpu_addr: int, nbytes: int):
+        """Allocate a small pinned DRAM region for a single transfer chunk.
+        Returns (host_ptr, tensor) — caller must keep tensor alive until transfer completes.
+        """
+        import torch
+        t = torch.empty(nbytes, dtype=torch.uint8, device="cpu").pin_memory()
+        host_ptr = t.data_ptr()
+        # Copy GPU → DRAM
+        self.copy_d2h_direct(gpu_addr, host_ptr, nbytes)
+        self.sync()
+        return host_ptr, t
+
+    def copy_d2h_direct(self, gpu_addr: int, host_addr: int, nbytes: int):
+        """hipMemcpy D2H between arbitrary addresses."""
+        self._hip.hipMemcpy(
+            self._ctypes.c_void_p(host_addr),
+            self._ctypes.c_void_p(gpu_addr),
+            self._ctypes.c_size_t(nbytes),
+            self._ctypes.c_int(2),  # D2H
+        )
+
+    def copy_h2d_direct(self, host_addr: int, gpu_addr: int, nbytes: int):
+        """hipMemcpy H2D between arbitrary addresses."""
+        self._hip.hipMemcpy(
+            self._ctypes.c_void_p(gpu_addr),
+            self._ctypes.c_void_p(host_addr),
+            self._ctypes.c_size_t(nbytes),
+            self._ctypes.c_int(1),  # H2D
+        )
 
     # -- address translation --------------------------------------------------
 
@@ -217,34 +247,36 @@ def patch_nixl_for_rocm():
 
         def _staging_get_xfer_descs(reqs, mem_type):
             if mem_type == "VRAM":
-                # 1. Copy local GPU regions to DRAM
-                if isinstance(reqs, np.ndarray):
-                    for i in range(len(reqs)):
-                        staging.copy_d2h(int(reqs[i, 0]), int(reqs[i, 1]))
-                else:
-                    for item in reqs:
-                        staging.copy_d2h(int(item[0]), int(item[1]))
-                staging.sync()
-                translated = staging.translate_reqs(reqs)
+                # Lazy staging: allocate small DRAM regions per-transfer,
+                # copy GPU→DRAM, register with RIXL, get xfer descs.
 
-                # 2. Lazy MR: register only the sub-regions needed for this transfer
-                if isinstance(translated, np.ndarray) and translated.size > 0:
-                    reg_addrs = [(int(translated[i, 0]), int(translated[i, 1]), 0, "")
-                                 for i in range(len(translated))]
-                elif isinstance(translated, list) and translated:
-                    reg_addrs = [(int(r[0]), int(r[1]), 0, "") for r in translated]
+                reg_addrs = []
+                staging_tensors = []  # keep alive until transfer completes
+
+                if isinstance(reqs, np.ndarray):
+                    items = [(int(reqs[i, 0]), int(reqs[i, 1])) for i in range(len(reqs))]
                 else:
-                    reg_addrs = []
+                    items = [(int(r[0]), int(r[1])) for r in reqs]
+
+                for gpu_addr, nbytes in items:
+                    host_ptr, tensor = staging.get_staging_region(gpu_addr, nbytes)
+                    reg_addrs.append((host_ptr, nbytes, 0, ""))
+                    staging_tensors.append(tensor)
 
                 if reg_addrs:
                     try:
                         per_xfer_descs = self.agent.register_memory(reg_addrs, "DRAM")
                         if hasattr(self, "_active_mr_descs"):
                             self._active_mr_descs.append(per_xfer_descs)
+                        if not hasattr(self, "_staging_tensors"):
+                            self._staging_tensors = []
+                        self._staging_tensors.extend(staging_tensors)
+                        return _orig_get(per_xfer_descs, "DRAM")
                     except Exception as e:
                         logger.warning("Lazy MR registration failed: %s", e)
-
-                return _orig_get(translated, "DRAM")
+                        # Fallback: try without staging
+                        return _orig_get(reqs, "DRAM")
+                return _orig_get(reqs, mem_type)
             return _orig_get(reqs, mem_type)
 
         self.agent.get_xfer_descs = _staging_get_xfer_descs
