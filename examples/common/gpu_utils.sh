@@ -362,6 +362,32 @@ gpu_gb_to_total_fraction() {
 
     local total_mib
     total_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits -i "$gpu_idx" 2>/dev/null)
+    # ROCm fallback: use amd-smi if nvidia-smi fails
+    if [[ -z "$total_mib" || "$total_mib" -eq 0 ]]; then
+        local amd_smi_cmd=""
+        if command -v amd-smi &>/dev/null; then amd_smi_cmd="amd-smi"
+        elif [[ -x /opt/rocm/bin/amd-smi ]]; then amd_smi_cmd="/opt/rocm/bin/amd-smi"
+        fi
+        if [[ -n "$amd_smi_cmd" ]]; then
+            total_mib=$($amd_smi_cmd static --vram --json 2>/dev/null | \
+                python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+# Handle both formats: {'gpu_data': [{'vram': {'size': {'value': N}}}]} or [{'vram': {'total': N}}]
+gpus = d.get('gpu_data', d) if isinstance(d, dict) else d
+if isinstance(gpus, dict):
+    gpus = gpus.get('gpu_data', [gpus])
+g = gpus[$gpu_idx]
+v = g.get('vram', g)
+if isinstance(v, dict) and 'size' in v:
+    s = v['size']
+    val = s.get('value', 0) if isinstance(s, dict) else s
+else:
+    val = v.get('total', v.get('size', 0))
+print(int(float(str(val).replace('MB','').replace('GB','').strip())))
+" 2>/dev/null)
+        fi
+    fi
     if [[ -z "$total_mib" || "$total_mib" -eq 0 ]]; then
         echo "gpu_gb_to_total_fraction: failed to query GPU $gpu_idx total memory" >&2
         return 1
@@ -440,6 +466,31 @@ gpu_gb_to_free_fraction() {
 
     local free_mib
     free_mib=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$gpu_idx" 2>/dev/null)
+    # ROCm fallback: use total VRAM as free estimate (conservative, before model load)
+    if [[ -z "$free_mib" || "$free_mib" -eq 0 ]]; then
+        local amd_smi_cmd=""
+        if command -v amd-smi &>/dev/null; then amd_smi_cmd="amd-smi"
+        elif [[ -x /opt/rocm/bin/amd-smi ]]; then amd_smi_cmd="/opt/rocm/bin/amd-smi"
+        fi
+        if [[ -n "$amd_smi_cmd" ]]; then
+            free_mib=$($amd_smi_cmd static --vram --json 2>/dev/null | \
+                python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+gpus = d.get('gpu_data', d) if isinstance(d, dict) else d
+if isinstance(gpus, dict):
+    gpus = gpus.get('gpu_data', [gpus])
+g = gpus[$gpu_idx]
+v = g.get('vram', g)
+if isinstance(v, dict) and 'size' in v:
+    s = v['size']
+    val = s.get('value', 0) if isinstance(s, dict) else s
+else:
+    val = v.get('total', v.get('size', 0))
+print(int(float(str(val).replace('MB','').replace('GB','').strip())))
+" 2>/dev/null)
+        fi
+    fi
     if [[ -z "$free_mib" || "$free_mib" -eq 0 ]]; then
         echo "gpu_gb_to_free_fraction: failed to query GPU $gpu_idx free memory" >&2
         return 1
