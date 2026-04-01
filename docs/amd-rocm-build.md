@@ -73,8 +73,12 @@ The container image already includes this step.
 
 ## Step 2: Build and Install RIXL
 
+> **Important**: Use the [patched RIXL fork](https://github.com/JohnQinAMD/RIXL) which includes transparent DRAM staging for Pensando ionic NICs (`src/plugins/ucx/dram_staging.{h,cpp}`). On NICs without GPU Direct RDMA, VRAM registration via `ucp_mem_map` fails — the patch adds automatic fallback to pinned host memory staging with zero link-time dependency on ROCm.
+
 ```bash
-cd /workspace/RIXL
+# Clone the patched RIXL (includes DRAM staging for ionic NICs)
+git clone https://github.com/JohnQinAMD/RIXL.git
+cd RIXL
 mkdir build && cd build
 meson setup .. --prefix=/opt/rocm/rixl \
   -Dwith_ucx=enabled \

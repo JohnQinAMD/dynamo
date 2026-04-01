@@ -181,7 +181,10 @@ done
 
 ## 3b. RIXL DRAM Staging (Plan B)
 
-When using RIXL/nixl instead of MoRI, GPU VRAM cannot be registered with ionic NICs. The `nixl_rocm_staging.py` monkey-patch solves this at runtime without modifying SGLang source.
+When using RIXL/nixl instead of MoRI, GPU VRAM cannot be registered with ionic NICs. Two solutions exist:
+
+1. **C++ UCX plugin** ([RIXL fork](https://github.com/JohnQinAMD/RIXL)): `dram_staging.{h,cpp}` in the UCX plugin adds transparent DRAM staging at the transport layer. Uses `dlopen("libamdhip64.so")` at runtime — zero link-time ROCm dependency. Automatic on ionic NICs.
+2. **Python monkey-patch** (`nixl_rocm_staging.py`): Patches `NixlKVManager` at runtime without modifying SGLang source. Fallback when using unpatched RIXL.
 
 ```mermaid
 flowchart LR
