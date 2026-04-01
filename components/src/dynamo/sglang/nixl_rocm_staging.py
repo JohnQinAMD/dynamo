@@ -271,11 +271,12 @@ def patch_nixl_for_rocm():
                         if not hasattr(self, "_staging_tensors"):
                             self._staging_tensors = []
                         self._staging_tensors.extend(staging_tensors)
-                        return _orig_get(per_xfer_descs, "DRAM")
                     except Exception as e:
                         logger.warning("Lazy MR registration failed: %s", e)
-                        # Fallback: try without staging
-                        return _orig_get(reqs, "DRAM")
+
+                    # Create xfer descs from the registered DRAM addresses
+                    xfer_tuples = [(addr, length, dev) for addr, length, dev, _ in reg_addrs]
+                    return _orig_get(xfer_tuples, "DRAM")
                 return _orig_get(reqs, mem_type)
             return _orig_get(reqs, mem_type)
 
