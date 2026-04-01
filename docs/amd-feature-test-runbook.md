@@ -437,6 +437,16 @@ for conc in [1, 4, 8]:
 | 10 | Mooncake RDMA + staging | **PASS** | 61.1 req/s c=8, 100% |
 | 11 | RIXL DRAM staging | **PASS** (unit) | 12/12 tests |
 
+### Manual E2E Results (MI355X, `amdprimus/dynamo-rocm-sglang`)
+
+| Test | Model | Status | Details |
+|------|-------|--------|---------|
+| Multimodal Image | Qwen2.5-VL-7B-Instruct | **PASS** | Correctly describes bus image ("OUT OF SERVICE") via Dynamo /v1/chat/completions |
+| Text Chat (VL model) | Qwen2.5-VL-7B-Instruct | **PASS** | "Hello! How can I assist you today?" |
+| Embedding | Qwen3-Embedding-4B | **FAIL (404)** | Needs `--embedding-worker` flag (not `--is-embedding`). Use `agg_embed_rocm.sh` |
+
+**Note**: VL model requires ~2 min for aiter JIT kernel compilation + ~2 min for CUDA graph capture on first inference. Subsequent requests are fast.
+
 ### Automated Pytest Results (MI355X, `amdprimus/dynamo-rocm-sglang`)
 
 | Suite | Passed | Failed | Skipped | Notes |

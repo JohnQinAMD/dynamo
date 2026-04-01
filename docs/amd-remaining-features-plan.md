@@ -83,7 +83,7 @@ kubectl get crd | grep dynamo
 | 7 | **Global Router** | ✅ | ✅ Unit tests pass (10/10) | E2E with SGLang pending | P1 |
 | 8 | **Global Planner** | ✅ | ✅ Unit tests pass (10/10) | E2E with SGLang pending | P1 |
 | 9 | **Profiler / DGDR** | ✅ | ⚠️ Skipped (needs aiconfigurator) | NVIDIA internal dep | P1 |
-| 10 | **Multimodal (Image)** | ✅ | ❌ Not tested | SGLang VL models on ROCm | P2 |
+| 10 | **Multimodal (Image)** | ✅ | ✅ PASS — Qwen2.5-VL-7B describes images correctly | Validated via Dynamo | P2 |
 | 11 | **Multimodal E/P/D** | ✅ | ❌ Not tested | Encode/Prefill/Decode disagg | P2 |
 | 12 | **Multimodal (Video)** | ✅ (preview) | ❌ Not tested | FastVideo / diffusion | P3 |
 | 13 | **Fault Tolerance — Migration** | ✅ | ⚠️ Test runs, disagg timeout | Need longer timeout / pre-cached model | P1 |
@@ -100,7 +100,7 @@ kubectl get crd | grep dynamo
 | 24 | **Tool Calling** | ✅ | ✅ Manual test passed (runbook Test 2) | Pytest pending | P2 |
 | 25 | **Speculative Decoding** | ✅ | ⚠️ SGLang has it, not tested via Dynamo | EAGLE/MTP via Dynamo | P2 |
 | 26 | **LoRA** | ✅ | ❌ Not tested | LoRA serving on ROCm | P3 |
-| 27 | **Embedding Models** | ✅ | ❌ Not tested | Embedding API on ROCm | P2 |
+| 27 | **Embedding Models** | ✅ | ⚠️ Worker loads OK but needs `--embedding-worker` flag | Use `agg_embed_rocm.sh` launch script | P2 |
 | 28 | **vLLM backend E2E** | ✅ | ⚠️ vLLM 0.18.1 installs but `_rocm_C` incompatible with SGLang container PyTorch | Need `vllm/vllm-openai-rocm` container | P1 |
 | 29 | **TensorRT-LLM backend** | ✅ | ❌ N/A — NVIDIA-only | Skip permanently | — |
 | 30 | **KVBM SSD tier** | ✅ | ❌ Not tested | GPU→CPU→SSD offload | P3 |
