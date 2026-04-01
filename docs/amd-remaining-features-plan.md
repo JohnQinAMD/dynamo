@@ -101,7 +101,7 @@ kubectl get crd | grep dynamo
 | 25 | **Speculative Decoding** | ✅ | ⚠️ SGLang has it, not tested via Dynamo | EAGLE/MTP via Dynamo | P2 |
 | 26 | **LoRA** | ✅ | ❌ Not tested | LoRA serving on ROCm | P3 |
 | 27 | **Embedding Models** | ✅ | ❌ Not tested | Embedding API on ROCm | P2 |
-| 28 | **vLLM backend E2E** | ✅ | ⚠️ Import verified, no serve test | Full vLLM serve E2E | P1 |
+| 28 | **vLLM backend E2E** | ✅ | ⚠️ vLLM 0.18.1 installs but `_rocm_C` incompatible with SGLang container PyTorch | Need `vllm/vllm-openai-rocm` container | P1 |
 | 29 | **TensorRT-LLM backend** | ✅ | ❌ N/A — NVIDIA-only | Skip permanently | — |
 | 30 | **KVBM SSD tier** | ✅ | ❌ Not tested | GPU→CPU→SSD offload | P3 |
 | 31 | **Model Express** | ✅ | ❌ Not tested | Weight streaming via NIXL | P3 |
@@ -205,14 +205,17 @@ kubectl get crd | grep dynamo
 - `examples/backends/vllm/launch/rocm/` — ROCm vLLM launch scripts
 - `scripts/build_maturin_py312.sh` — Py3.12 wheel builder
 
-**Steps**:
-1. Use `rocm/vllm:latest` container (Python 3.12)
-2. Build Dynamo maturin wheel: `bash scripts/build_maturin_py312.sh`
-3. Run `tests/serve/test_vllm.py` — specifically the `aggregated` config with Qwen model
-4. If model load fails, ensure ROCm env vars are set
-5. Add `@pytest.mark.rocm` to relevant vLLM serve test configs
+**Tested**: vLLM 0.18.1 installs in the SGLang container but `_rocm_C` extension is incompatible (built for different PyTorch/ROCm version). Engine core fails with `No module named 'vllm._rocm_C'`.
 
-**Validation**: vLLM serve test passes on MI355X with Py3.12
+**Steps** (updated):
+1. Use **`vllm/vllm-openai-rocm:latest`** container (NOT the SGLang container) — this has pre-compiled `_rocm_C` matching its PyTorch
+2. Build Dynamo inside that container: `bash scripts/build_maturin_py312.sh` (Python 3.12)
+3. Mount HF cache on shared storage: `-v /mnt/vast/john/hf_cache:/root/.cache/huggingface`
+4. Run: `python3 -m pytest tests/serve/test_vllm.py -k aggregated -v --timeout=600`
+
+**Blocking**: Need to pull `vllm/vllm-openai-rocm:latest` (multi-GB image) and build Dynamo Rust bindings inside it.
+
+**Validation**: vLLM serve test passes on MI355X with Py3.12 in official vLLM ROCm container
 
 ---
 
