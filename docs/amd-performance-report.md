@@ -107,7 +107,7 @@ Verified on 2 independent node pairs.
 | Backend | Result | Root Cause |
 |---------|--------|------------|
 | **MoRI RDMA** | **7.4 req/s, 475 tok/s (100% ok)** | Matched ionic subnets + QoS |
-| **🆕 RIXL + DRAM staging** | **RDMA via pinned DRAM bounce** | Monkey-patch, zero SGLang changes |
+| **🆕 RIXL + C++ DRAM staging** | **Cross-node E2E PASS, sub-1s latency** | C++ UCX plugin auto-fallback, RDMA via ionic, zero Python patches |
 | **🆕 Mooncake + ROCm patch** | GPU MR → clear error + fallback | `mooncake_rocm_rdma.patch` compiled OK |
 | Mooncake RDMA (unpatched) | `ibv_reg_mr ENOMEM` | No GPU Direct RDMA on ionic |
 | Mooncake TCP | Decode crashes | Buffer management failure |
@@ -200,7 +200,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | `OmniConfig` vLLM import | Worker startup crash | Lazy import in `dynamo/vllm/main.py` |
 | Ionic driver ABI mismatch | MoRI/RIXL RDMA blocked | Install `libionic1 54.0-185` from host |
 | Mooncake GPU MR on ionic | `ibv_reg_mr ENOMEM` for VRAM | ROCm patch: detect GPU/CPU, return `ERR_CONTEXT` for GPU |
-| RIXL VRAM registration | `NIXL_ERR_BACKEND` | DRAM staging monkey-patch: pinned host bounce buffers |
+| RIXL VRAM registration | `NIXL_ERR_BACKEND` | C++ DRAM staging in UCX plugin (`dram_staging.{h,cpp}`), auto-fallback to pinned DRAM |
 
 ---
 
@@ -228,7 +228,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | ~~SGLang FPM relay~~ | — | **DONE** (3/3 tests passed) |
 | ~~K8s CRDs + infra~~ | — | **DONE** (7 CRDs, etcd, NATS deployed) |
 | ~~K8s Planner E2E~~ | — | **DONE** (PlannerConfig test passed on K8s chi2883) |
-| ~~RIXL DRAM staging~~ | — | **DONE** (monkey-patch, 12/12 tests passed on MI355X) |
+| ~~RIXL DRAM staging~~ | — | **DONE** (C++ UCX plugin, cross-node E2E verified on chi2885+chi2896) |
 | ~~Mooncake ROCm patch~~ | — | **DONE** (compiled OK, GPU/CPU detection + ionic max_sge) |
 | ~~vLLM Python 3.12 gap~~ | — | **RESOLVED** — abi3 wheel verified on Python 3.12 (175/175 pass on `rocm/vllm:latest`) |
 | ~~vLLM backend integration~~ | — | **DONE** — `dynamo.llm` + vLLM 0.11.2 cross-import verified on Python 3.12 (`rocm/vllm:latest`) |
@@ -259,6 +259,7 @@ The Dynamic Planner auto-scales workers based on SLA targets (TTFT, ITL) using m
 | 18 | **vLLM backend integration** | 1 | **VERIFIED** — `dynamo.llm` + vLLM 0.11.2 cross-import OK on Python 3.12 |
 | 19 | **RIXL DRAM staging unit** | 1 | **12/12 PASSED** on MI355X (hipMemcpy D2H/H2D, monkey-patch) |
 | 20 | **Mooncake ROCm patch compile** | 1 | **Build OK** (rdma_context.cpp + config.cpp) |
+| 21 | **RIXL C++ cross-node E2E** | 2 | **PASS** chi2885+chi2896, sub-1s latency, RDMA via ionic |
 
 ---
 

@@ -332,39 +332,79 @@ python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote
 | 4 | 113ms | 25.2 | 100% |
 | 8 | 109ms | 61.1 | 100% |
 
-### Test 11: RIXL DRAM Staging
+### Test 11: RIXL Cross-Node Disaggregated Serving
 
-RIXL (AMD's port of NIXL) is included in `amdprimus/dynamo-rocm-sglang:latest`. The `nixl_rocm_staging.py` monkey-patch provides DRAM staging for ionic NICs.
+RIXL (AMD's port of NIXL) includes native C++ DRAM staging in its UCX plugin
+(`RIXL/src/plugins/ucx/dram_staging.{h,cpp}`). On NICs without GPU Direct RDMA
+(e.g. Pensando ionic), VRAM registration automatically falls back to pinned
+DRAM staging — no Python monkey-patch or env vars needed.
 
-**Prefill node**:
+**Build RIXL** (if not using the pre-built image):
 
 ```bash
-export SGLANG_NIXL_ROCM_STAGING=1
-
-python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
-    --host 0.0.0.0 \
-    --disaggregation-mode prefill \
-    --disaggregation-transfer-backend nixl
+cd /workspace/RIXL
+meson setup builddir --prefix=/opt/rocm/rixl \
+    -Ducx_path=/usr/local/ucx -Duse_rocm=true -Drocm_path=/opt/rocm \
+    -Ddisable_gds_backend=true -Denable_plugins=UCX,POSIX -Dbuildtype=release
+ninja -C builddir install
 ```
 
-**Decode node**:
+**Prefill node** (e.g. chi2885, IP=149.28.112.147):
 
 ```bash
-export SGLANG_NIXL_ROCM_STAGING=1
-PREFILL_IP=<prefill-node-ip>
+export SGLANG_USE_AITER=0
+export UCX_TLS=rc_v,tcp
+PREFILL_IP=149.28.112.147
+
+rm -rf /tmp/default.etcd
+etcd --listen-client-urls http://0.0.0.0:2379 \
+     --advertise-client-urls http://${PREFILL_IP}:2379 &
+nats-server -p 4222 -js --client_advertise ${PREFILL_IP}:4222 &
+sleep 3
 export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
 export NATS_SERVER=nats://${PREFILL_IP}:4222
 
-python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
-    --host 0.0.0.0 \
-    --disaggregation-mode decode \
-    --disaggregation-transfer-backend nixl
+python3 -m dynamo.frontend --http-port 8000 --router-mode round-robin &
+HIP_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
+    --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
+    --host 0.0.0.0 --disaggregation-mode prefill \
+    --disaggregation-transfer-backend nixl \
+    --mem-fraction-static 0.015 \
+    --attention-backend triton --disable-cuda-graph
 ```
 
-**Important**:
-- `SGLANG_NIXL_ROCM_STAGING=1` activates pinned DRAM bounce buffers
-- Uses same architecture as Mooncake staging (hipMemcpy D2H/H2D)
-- Unit tests pass (12/12), prefill worker verified on MI355X
+**Decode node** (e.g. chi2896):
+
+```bash
+export SGLANG_USE_AITER=0
+export UCX_TLS=rc_v,tcp
+PREFILL_IP=149.28.112.147
+export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
+export NATS_SERVER=nats://${PREFILL_IP}:4222
+
+HIP_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
+    --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote-code \
+    --host 0.0.0.0 --disaggregation-mode decode \
+    --disaggregation-transfer-backend nixl \
+    --mem-fraction-static 0.016 \
+    --attention-backend triton --disable-cuda-graph
+```
+
+**Test**:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Hello"}],"max_tokens":16}'
+```
+
+**Key points**:
+- C++ DRAM staging is automatic — no `SGLANG_NIXL_ROCM_STAGING` env var needed
+- `UCX_TLS=rc_v,tcp` enables RDMA data path + TCP for UCX control messages
+- `SGLANG_USE_AITER=0` avoids aiter JIT kernel segfaults on MI355X (gfx950)
+- `--attention-backend triton` uses Triton attention kernels instead of aiter
+- Data path: GPU KV → hipMemcpy D2H → DRAM → RDMA WRITE → DRAM → hipMemcpy H2D → GPU KV
+- Verified on chi2885 + chi2896 (MI355X, ionic 400Gb), sub-second latency after warmup
 
 ---
 
@@ -412,6 +452,9 @@ for conc in [1, 4, 8]:
 |---------|-------|-----|
 | `libibverbs: Warning: Driver ionic does not support the kernel ABI` | Container/host libionic version mismatch | Run `fix-ionic-abi.sh` or copy host driver manually |
 | `ibv_reg_mr ENOMEM` with Mooncake | Ionic can't register GPU VRAM | Set `SGLANG_MOONCAKE_ROCM_STAGING=1` |
+| `NIXL_ERR_BACKEND` with RIXL VRAM | Ionic can't GPU Direct RDMA | Use RIXL with C++ DRAM staging (automatic with patched RIXL UCX plugin) |
+| `no active messages transport ... local IPv6 remote IPv4` | UCX can't find matching AM transport on ionic | Set `UCX_TLS=rc_v,tcp` |
+| aiter segfault on MI355X (gfx950) | aiter JIT kernels crash on gfx950 | Set `SGLANG_USE_AITER=0 --attention-backend triton` |
 | Decode can't connect to prefill bootstrap | SGLang `--host` defaults to 127.0.0.1 | Pass `--host 0.0.0.0` |
 | MoRI hangs during init | Ionic subnet mismatch between nodes | Match subnets (Prerequisite 6) |
 | `stdbool.h not found` during build | bindgen can't find GCC headers | Set `BINDGEN_EXTRA_CLANG_ARGS` |
@@ -435,7 +478,7 @@ for conc in [1, 4, 8]:
 | 8 | Pytest Suite | **PASS** | 190+ passed |
 | 9 | MoRI RDMA disagg | **PASS** | 81.7 req/s c=8, 100% |
 | 10 | Mooncake RDMA + staging | **PASS** | 61.1 req/s c=8, 100% |
-| 11 | RIXL DRAM staging | **PASS** (unit) | 12/12 tests |
+| 11 | RIXL cross-node disagg | **PASS** (E2E) | C++ DRAM staging, RDMA via ionic, sub-1s latency |
 
 ### Manual E2E Results (MI355X, `amdprimus/dynamo-rocm-sglang`)
 
@@ -516,4 +559,4 @@ python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B --gpu-memory-utilization 0.80
 |---------|-----------|-------------|-------|
 | **MoRI RDMA** | 73ms | 81.7 | `--disaggregation-transfer-backend mori --disaggregation-ib-device <dev>` |
 | **Mooncake + staging** | 85ms | 61.1 | `SGLANG_MOONCAKE_ROCM_STAGING=1 --disaggregation-transfer-backend mooncake` |
-| **RIXL + staging** | — | — | `SGLANG_NIXL_ROCM_STAGING=1 --disaggregation-transfer-backend nixl` |
+| **RIXL + C++ staging** | ~500ms | — | `UCX_TLS=rc_v,tcp SGLANG_USE_AITER=0 --disaggregation-transfer-backend nixl --attention-backend triton --disable-cuda-graph` |
