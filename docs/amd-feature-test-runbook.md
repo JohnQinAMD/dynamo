@@ -265,7 +265,7 @@ python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote
 **Decode node** (points to prefill's etcd/NATS):
 
 ```bash
-PREFILL_IP=<prefill-node-ip>
+PREFILL_IP=`<prefill-node-ip>`
 export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
 export NATS_SERVER=nats://${PREFILL_IP}:4222
 
@@ -310,7 +310,7 @@ python3 -m dynamo.sglang --model-path Qwen/Qwen3-0.6B --tp-size 1 --trust-remote
 **Decode node**:
 
 ```bash
-PREFILL_IP=<prefill-node-ip>
+PREFILL_IP=`<prefill-node-ip>`
 export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
 export NATS_SERVER=nats://${PREFILL_IP}:4222
 
@@ -349,12 +349,12 @@ meson setup builddir --prefix=/opt/rocm/rixl \
 ninja -C builddir install
 ```
 
-**Prefill node** (e.g. <prefill-node>, IP=<prefill-node-ip>):
+**Prefill node**::
 
 ```bash
 export SGLANG_USE_AITER=0
 export UCX_TLS=rc_v,tcp
-PREFILL_IP=<prefill-node-ip>
+PREFILL_IP=`<prefill-node-ip>`
 
 rm -rf /tmp/default.etcd
 etcd --listen-client-urls http://0.0.0.0:2379 \
@@ -373,12 +373,12 @@ HIP_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
     --attention-backend triton --disable-cuda-graph
 ```
 
-**Decode node** (e.g. <decode-node>):
+**Decode node**::
 
 ```bash
 export SGLANG_USE_AITER=0
 export UCX_TLS=rc_v,tcp
-PREFILL_IP=<prefill-node-ip>
+PREFILL_IP=`<prefill-node-ip>`
 export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
 export NATS_SERVER=nats://${PREFILL_IP}:4222
 
@@ -404,7 +404,7 @@ curl http://localhost:8000/v1/chat/completions \
 - `SGLANG_USE_AITER=0` avoids aiter JIT kernel segfaults on MI355X (gfx950)
 - `--attention-backend triton` uses Triton attention kernels instead of aiter
 - Data path: GPU KV → hipMemcpy D2H → DRAM → RDMA WRITE → DRAM → hipMemcpy H2D → GPU KV
-- Verified on <prefill-node> + <decode-node> (MI355X, ionic 400Gb), sub-second latency after warmup
+- Verified on 2 MI355X nodes (MI355X, ionic 400Gb), sub-second latency after warmup
 
 ---
 

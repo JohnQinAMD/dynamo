@@ -319,7 +319,7 @@ export RCCL_MSCCL_ENABLE=0
 export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 # Point to prefill node's infrastructure
-PREFILL_IP=<<prefill-node>-ip>
+PREFILL_IP=`<prefill-node-ip>`
 export ETCD_ENDPOINTS="http://${PREFILL_IP}:2379"
 export NATS_SERVER="nats://${PREFILL_IP}:4222"
 
@@ -342,14 +342,14 @@ python3 -m dynamo.sglang \
 
 ```bash
 # Single request
-curl http://<prefill-ip>:8000/v1/chat/completions \
+curl http://`<prefill-ip>`:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"DeepSeek-V3","messages":[{"role":"user","content":"Hello!"}],"max_tokens":64}'
 
 # Benchmark
 python3 -m sglang.bench_serving \
     --backend sglang \
-    --base-url http://<prefill-ip>:8000 \
+    --base-url http://`<prefill-ip>`:8000 \
     --model DeepSeek-V3 \
     --num-prompts 100 --request-rate 8
 ```
