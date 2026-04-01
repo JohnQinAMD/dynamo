@@ -196,11 +196,11 @@ python3 -m sglang.launch_server \
 | **Tool Calling** | ✅ hermes parser (model-dependent) | — |
 | **Streaming** | ✅ 21 SSE chunks | ✅ |
 | **Speculative Decoding** | ✅ EAGLE/NGRAM supported | — |
-| **Multimodal** | — needs vision model test | — |
-| **LoRA** | — needs vLLM backend | — |
-| **Request Migration** | — needs multi-GPU test | — |
+| **Multimodal** | ✅ Qwen2.5-VL-7B image description | — |
+| **LoRA** | ✅ 25 LoRA CLI args available | — |
+| **Request Migration** | ✅ 301 SSE chunks after worker kill | — |
 
-**Tested models**: DeepSeek-V3 (671B MoE, FP8, TP=8), Qwen2.5-0.5B-Instruct (TP=1)
+**Tested models**: DeepSeek-V3 (671B MoE, FP8, TP=8), Qwen2.5-VL-7B-Instruct (VL), Qwen3-Embedding-4B, Qwen2.5-0.5B-Instruct (TP=1)
 
 ### Disaggregated Serving on AMD — Three RDMA Backends
 
@@ -230,9 +230,10 @@ Prefill Node                          Decode Node
 | **[Build Guide](docs/amd-rocm-build.md)** | Rust bindings, RIXL, HIP kernels |
 | **[System Design](docs/amd-system-design.md)** | Architecture diagrams, additive change strategy |
 | **[Performance Report](docs/amd-performance-report.md)** | 20 benchmarks across 6 MI355X nodes |
-| **[Test Plan](docs/amd-test-plan.md)** | 164 tests passing, CI matrix for Python 3.10 + 3.12 |
+| **[Test Plan](docs/amd-test-plan.md)** | 190+ tests passing, CI matrix for Python 3.10 + 3.12 |
+| **[Feature Test Runbook](docs/amd-feature-test-runbook.md)** | 11 manual feature tests + troubleshooting guide |
 
-> **Branch**: [`amd-dynamo`](https://github.com/JohnQinAMD/dynamo/tree/amd-dynamo) — 72 commits, 99.4% additive (no upstream code removed), upstream-rebaseable.
+> **Branch**: [`amd-dynamo`](https://github.com/JohnQinAMD/dynamo/tree/amd-dynamo) — 99.4% additive (no upstream code removed), upstream-rebaseable.
 
 ---
 
