@@ -141,3 +141,4 @@ package-lock.json
 # macOS
 .DS_Store
 **/.DS_Store
+.k8s-kubeconfig.yaml

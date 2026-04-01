@@ -82,20 +82,34 @@ class _RocmDramStaging:
         # gpu_base → (pinned_tensor, host_ptr, size)
         self.buffers: dict[int, tuple] = {}
 
-    def create(self, gpu_ptr: int, size: int) -> int:
-        """Record GPU buffer metadata for lazy staging. Returns a placeholder host ptr.
+    def create(self, gpu_ptr: int, size: int, allocate: bool = True) -> int:
+        """Create a DRAM staging buffer for gpu_ptr.
         
-        In lazy mode (ionic), we don't allocate the full DRAM mirror upfront.
-        Instead, small staging regions are allocated per-transfer in get_staging_region().
+        Args:
+            gpu_ptr: GPU buffer base address
+            size: buffer size in bytes
+            allocate: if True, allocate pinned DRAM now (decode side needs stable addresses).
+                      if False, lazy mode — only record metadata (prefill side).
+        Returns:
+            host_ptr if allocated, or gpu_ptr as placeholder if lazy.
         """
-        # Store metadata only — no allocation
-        self.buffers[gpu_ptr] = (None, gpu_ptr, size)  # (tensor=None, placeholder=gpu_ptr, size)
-        logger.info(
-            "ROCm DRAM staging: %d MB GPU %s (lazy — no allocation yet)",
-            size // (1024 * 1024),
-            hex(gpu_ptr),
-        )
-        return gpu_ptr  # return GPU ptr as placeholder — translate_base will map it
+        if allocate:
+            import torch
+            t = torch.empty(size, dtype=torch.uint8, device="cpu").pin_memory()
+            host_ptr = t.data_ptr()
+            self.buffers[gpu_ptr] = (t, host_ptr, size)
+            logger.info(
+                "ROCm DRAM staging: %d MB  GPU %s → host %s",
+                size // (1024 * 1024), hex(gpu_ptr), hex(host_ptr),
+            )
+            return host_ptr
+        else:
+            self.buffers[gpu_ptr] = (None, gpu_ptr, size)
+            logger.info(
+                "ROCm DRAM staging: %d MB GPU %s (lazy — no allocation)",
+                size // (1024 * 1024), hex(gpu_ptr),
+            )
+            return gpu_ptr
 
     def get_staging_region(self, gpu_addr: int, nbytes: int):
         """Allocate a small pinned DRAM region for a single transfer chunk.
@@ -288,23 +302,38 @@ def patch_nixl_for_rocm():
     # ---- 2. register_buffer_to_engine ---------------------------------------
     def _patched_register(self):
         staging: _RocmDramStaging = self._rocm_staging
+        MAX_CHUNK = 512 * 1024 * 1024  # 512MB per MR chunk (ionic safe limit)
+        is_decode = (self.disaggregation_mode.value == "decode")
 
-        # Solution A: lazy MR registration for ionic NICs.
-        # ionic has ~3GB total MR capacity — we cannot pre-register all KV buffers.
-        # Instead: create DRAM staging buffers but skip ibv_reg_mr.
-        # MRs will be registered per-transfer in _staging_get_xfer_descs.
+        if is_decode:
+            # DECODE side: pre-allocate DRAM + register in chunks.
+            # Decode needs stable addresses for RDMA WRITE targets.
+            # Register in 512MB chunks to stay under ionic ~3GB MR limit.
+            kv_addrs = []
+            for gpu_ptr, data_len in zip(
+                self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
+            ):
+                host_ptr = staging.create(gpu_ptr, data_len, allocate=True)
+                offset = 0
+                while offset < data_len:
+                    chunk = min(MAX_CHUNK, data_len - offset)
+                    kv_addrs.append((host_ptr + offset, chunk, 0, ""))
+                    offset += chunk
+            self.kv_descs = self.agent.register_memory(kv_addrs, "DRAM")
+            logger.info("ROCm staging DECODE: registered %d chunks (%d buffers)", len(kv_addrs), len(self.kv_args.kv_data_ptrs))
+            if not self.kv_descs:
+                raise Exception("NIXL DRAM registration failed for KV tensors (decode)")
+        else:
+            # PREFILL side: lazy — create metadata only, no DRAM allocation.
+            # MRs registered per-transfer in _staging_get_xfer_descs.
+            for gpu_ptr, data_len in zip(
+                self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
+            ):
+                staging.create(gpu_ptr, data_len, allocate=False)
+            logger.info("ROCm staging PREFILL: %d lazy buffers (no pre-alloc)", len(self.kv_args.kv_data_ptrs))
+            self.kv_descs = True  # placeholder
 
-        # Create DRAM staging buffers (no registration yet)
-        for gpu_ptr, data_len in zip(
-            self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
-        ):
-            staging.create(gpu_ptr, data_len)
-        logger.info(
-            "ROCm staging: created %d DRAM mirrors (lazy MR — no pre-registration)",
-            len(self.kv_args.kv_data_ptrs),
-        )
-
-        # Aux buffers are small — register normally
+        # Aux buffers are small — always register
         aux_addrs = []
         for ptr, length in zip(
             self.kv_args.aux_data_ptrs, self.kv_args.aux_data_lens
@@ -314,17 +343,28 @@ def patch_nixl_for_rocm():
         if not self.aux_descs:
             raise Exception("NIXL DRAM registration failed for aux tensors")
 
-        # State buffers — create staging but skip registration
+        # State buffers — same pattern as KV
         if self.kv_args.state_data_ptrs and self.kv_args.state_data_lens:
-            for gpu_ptr, data_len in zip(
-                self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
-            ):
-                staging.create(gpu_ptr, data_len)
+            if is_decode:
+                state_addrs = []
+                for gpu_ptr, data_len in zip(
+                    self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
+                ):
+                    host_ptr = staging.create(gpu_ptr, data_len, allocate=True)
+                    offset = 0
+                    while offset < data_len:
+                        chunk = min(MAX_CHUNK, data_len - offset)
+                        state_addrs.append((host_ptr + offset, chunk, 0, ""))
+                        offset += chunk
+                self.state_descs = self.agent.register_memory(state_addrs, "DRAM")
+            else:
+                for gpu_ptr, data_len in zip(
+                    self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
+                ):
+                    staging.create(gpu_ptr, data_len, allocate=False)
+                self.state_descs = True
 
-        # Track per-transfer registrations for cleanup
         self._active_mr_descs = []
-        self.kv_descs = True  # placeholder — actual descs created per-transfer
-        self.state_descs = True
 
     NixlKVManager.register_buffer_to_engine = _patched_register
 
