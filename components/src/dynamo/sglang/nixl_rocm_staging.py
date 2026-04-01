@@ -126,19 +126,19 @@ class _RocmDramStaging:
     def copy_d2h_direct(self, gpu_addr: int, host_addr: int, nbytes: int):
         """hipMemcpy D2H between arbitrary addresses."""
         self._hip.hipMemcpy(
-            self._ctypes.c_void_p(host_addr),
-            self._ctypes.c_void_p(gpu_addr),
-            self._ctypes.c_size_t(nbytes),
-            self._ctypes.c_int(2),  # D2H
+            ctypes.c_void_p(host_addr),
+            ctypes.c_void_p(gpu_addr),
+            ctypes.c_size_t(nbytes),
+            ctypes.c_int(2),  # D2H
         )
 
     def copy_h2d_direct(self, host_addr: int, gpu_addr: int, nbytes: int):
         """hipMemcpy H2D between arbitrary addresses."""
         self._hip.hipMemcpy(
-            self._ctypes.c_void_p(gpu_addr),
-            self._ctypes.c_void_p(host_addr),
-            self._ctypes.c_size_t(nbytes),
-            self._ctypes.c_int(1),  # H2D
+            ctypes.c_void_p(gpu_addr),
+            ctypes.c_void_p(host_addr),
+            ctypes.c_size_t(nbytes),
+            ctypes.c_int(1),  # H2D
         )
 
     # -- address translation --------------------------------------------------
