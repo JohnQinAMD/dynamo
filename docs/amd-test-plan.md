@@ -2,7 +2,7 @@
 
 > Comprehensive plan to bring NVIDIA Dynamo's 68-file test suite to full ROCm coverage on MI300X / MI325X / MI355X.
 
-**Status**: **164 tests pass on MI355X** (42 skipped, 1 infra error). Validated on `chi2896` using `rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2` with `maturin develop --release`.
+**Status**: **190+ tests pass on MI355X** (~50 skipped, ~8 failed — all non-code issues). Validated using `amdprimus/dynamo-rocm-sglang:latest`.
 
 ---
 
@@ -11,7 +11,7 @@
 | Metric | Count | Notes |
 |--------|-------|-------|
 | Total test files (`dynamo/tests/`) | 68+ | Upstream + AMD-additive tests |
-| Tests passing on MI355X | **164** | Full suite run on chi2896 |
+| Tests passing on MI355X | **190+** | Full suite on `amdprimus/dynamo-rocm-sglang` |
 | Tests skipped (expected) | **42** | vLLM not installed (34), RIXL not in image (2), ionic in Docker (1), env vars (5) |
 | Tests blocked (NVIDIA-only) | **20** | TRT-LLM (6), vLLM Python 3.12 gap (14) |
 | Manual ROCm tests (performance report) | 20 | Includes DRAM staging + mooncake patch |
@@ -22,7 +22,7 @@
 
 ```bash
 docker run --rm -it --device=/dev/kfd --device=/dev/dri --group-add video \
-    --shm-size 64G -v /mnt/vast/john/rocm-dynamo:/workspace \
+    --shm-size 64G -v /path/to/dynamo:/workspace \
     rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
 
 # Inside container:
@@ -36,7 +36,7 @@ pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio pytest-time
     nats-py kr8s prometheus_api_client filterpy pmdarima prophet boto3 kubernetes_asyncio
 
 # Run all tests:
-python3 -m pytest tests/ --no-header -q --tb=no  # 164 passed, 42 skipped
+python3 -m pytest tests/ --no-header -q --tb=no  # 190+ passed, ~50 skipped
 ```
 
 ---

@@ -40,7 +40,7 @@ MODEL=/models/Qwen2.5-0.5B-Instruct TP=1 sbatch dynamo_standalone.slurm
 | `TP` | `8` | Tensor parallelism size |
 | `BACKEND` | `mori` | Transfer backend: `mori`, `nixl`, `mooncake` |
 | `DOCKER_IMAGE` | `rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2` | Container image |
-| `DYNAMO_SRC` | `/mnt/vast/john/rocm-dynamo` | Dynamo source (shared mount) |
+| `DYNAMO_SRC` | `/path/to/workspace` | Dynamo source (shared mount) |
 | `PORT` | `8000` | Frontend HTTP port |
 
 ## Prerequisites

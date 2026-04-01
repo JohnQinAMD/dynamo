@@ -14,8 +14,8 @@ K8s 节点已通过 Slurm 占用，防止干扰：
 
 ```bash
 # Job 11558 — 2 K8s nodes, 4 hours
-# Nodes: chi2815, chi2878
-salloc -p k8s -N 2 -w chi2815,chi2878 --job-name=dynamo-k8s-test -t 4:00:00 --no-shell
+# Nodes: k8s-worker-2, k8s-worker-1
+salloc -p k8s -N 2 -w k8s-worker-2,k8s-worker-1 --job-name=dynamo-k8s-test -t 4:00:00 --no-shell
 ```
 
 如果过期需要重新 salloc（从任意 chi 节点执行上面命令即可）。
@@ -24,20 +24,20 @@ salloc -p k8s -N 2 -w chi2815,chi2878 --job-name=dynamo-k8s-test -t 4:00:00 --no
 
 | 项 | 值 |
 |----|-----|
-| K3s Master | chi2894 (216.128.149.131) |
+| K3s Master | <k8s-master> |
 | K3s Version | v1.34.5+k3s1 |
-| Kubeconfig | `/mnt/vast/john/rocm-dynamo/dynamo/.k8s-kubeconfig.yaml` |
-| Worker 节点 | chi2878 (Ready, MI355X 8 GPU, `amd.com/gpu.product-name=AMD_Instinct_MI355_OAM`) |
+| Kubeconfig | `/path/to/dynamo/dynamo/.k8s-kubeconfig.yaml` |
+| Worker 节点 | k8s-worker-1 (Ready, MI355X 8 GPU, `amd.com/gpu.product-name=AMD_Instinct_MI355_OAM`) |
 | GPU Operator | `kube-amd-gpu` namespace，device-plugin / metrics-exporter / node-labeller 已运行 |
 | NIC Operator | `kube-amd-network` namespace，ionic NIC 已发现 (`amd.com/nic: 8`) |
 | Dynamo CRDs | **未安装** — 需要先 `kubectl apply` CRD YAMLs |
 
-**注意**: chi2815 不在 K8s 集群中（K3s agent 未运行）。chi2878 的 `amd.com/gpu: 0` 表示 GPU 当前被其他 Slurm 任务占用，需等 Slurm job 释放或 drain 该节点的 Slurm 任务后，GPU 设备插件才会报出可用 GPU。
+**注意**: k8s-worker-2 不在 K8s 集群中（K3s agent 未运行）。k8s-worker-1 的 `amd.com/gpu: 0` 表示 GPU 当前被其他 Slurm 任务占用，需等 Slurm job 释放或 drain 该节点的 Slurm 任务后，GPU 设备插件才会报出可用 GPU。
 
 ### kubectl 使用方法
 
 ```bash
-export KUBECONFIG=/mnt/vast/john/rocm-dynamo/dynamo/.k8s-kubeconfig.yaml
+export KUBECONFIG=/path/to/dynamo/dynamo/.k8s-kubeconfig.yaml
 kubectl get nodes
 kubectl get pods -A -o wide
 ```
@@ -45,8 +45,8 @@ kubectl get pods -A -o wide
 ### 安装 Dynamo CRDs（Task 4 前置步骤）
 
 ```bash
-export KUBECONFIG=/mnt/vast/john/rocm-dynamo/dynamo/.k8s-kubeconfig.yaml
-cd /mnt/vast/john/rocm-dynamo/dynamo
+export KUBECONFIG=/path/to/dynamo/dynamo/.k8s-kubeconfig.yaml
+cd /path/to/dynamo/dynamo
 
 # Create namespace
 kubectl create namespace dynamo 2>/dev/null || true
@@ -64,7 +64,7 @@ kubectl get crd | grep dynamo
 
 | 节点 | 状态 | 用途 |
 |------|------|------|
-| chi2761, chi2885, chi2896 | idle (deepep-a66 partition) | 非 K8s 测试（FT, disagg, GPU serve） |
+| MI355X test nodes | idle (deepep-a66 partition) | 非 K8s 测试（FT, disagg, GPU serve） |
 
 ---
 
@@ -210,7 +210,7 @@ kubectl get crd | grep dynamo
 **Steps** (updated):
 1. Use **`vllm/vllm-openai-rocm:latest`** container (NOT the SGLang container) — this has pre-compiled `_rocm_C` matching its PyTorch
 2. Build Dynamo inside that container: `bash scripts/build_maturin_py312.sh` (Python 3.12)
-3. Mount HF cache on shared storage: `-v /mnt/vast/john/hf_cache:/root/.cache/huggingface`
+3. Mount HF cache on shared storage: `-v /path/to/hf_cache:/root/.cache/huggingface`
 4. Run: `python3 -m pytest tests/serve/test_vllm.py -k aggregated -v --timeout=600`
 
 **Blocking**: Need to pull `vllm/vllm-openai-rocm:latest` (multi-GB image) and build Dynamo Rust bindings inside it.

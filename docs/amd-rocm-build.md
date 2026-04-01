@@ -4,7 +4,7 @@ This guide explains how to build and run Dynamo on AMD GPUs using ROCm and RIXL 
 
 ## Prerequisites
 
-- AMD Instinct MI200/MI300 GPU (or compatible)
+- AMD Instinct MI200/MI300/MI355X GPU (or compatible)
 - ROCm 6.x installed (`/opt/rocm`)
 - Docker (for the container workflow) or a bare-metal ROCm environment
 

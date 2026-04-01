@@ -349,12 +349,12 @@ meson setup builddir --prefix=/opt/rocm/rixl \
 ninja -C builddir install
 ```
 
-**Prefill node** (e.g. chi2885, IP=149.28.112.147):
+**Prefill node** (e.g. <prefill-node>, IP=<prefill-node-ip>):
 
 ```bash
 export SGLANG_USE_AITER=0
 export UCX_TLS=rc_v,tcp
-PREFILL_IP=149.28.112.147
+PREFILL_IP=<prefill-node-ip>
 
 rm -rf /tmp/default.etcd
 etcd --listen-client-urls http://0.0.0.0:2379 \
@@ -373,12 +373,12 @@ HIP_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
     --attention-backend triton --disable-cuda-graph
 ```
 
-**Decode node** (e.g. chi2896):
+**Decode node** (e.g. <decode-node>):
 
 ```bash
 export SGLANG_USE_AITER=0
 export UCX_TLS=rc_v,tcp
-PREFILL_IP=149.28.112.147
+PREFILL_IP=<prefill-node-ip>
 export ETCD_ENDPOINTS=http://${PREFILL_IP}:2379
 export NATS_SERVER=nats://${PREFILL_IP}:4222
 
@@ -404,7 +404,7 @@ curl http://localhost:8000/v1/chat/completions \
 - `SGLANG_USE_AITER=0` avoids aiter JIT kernel segfaults on MI355X (gfx950)
 - `--attention-backend triton` uses Triton attention kernels instead of aiter
 - Data path: GPU KV → hipMemcpy D2H → DRAM → RDMA WRITE → DRAM → hipMemcpy H2D → GPU KV
-- Verified on chi2885 + chi2896 (MI355X, ionic 400Gb), sub-second latency after warmup
+- Verified on <prefill-node> + <decode-node> (MI355X, ionic 400Gb), sub-second latency after warmup
 
 ---
 
@@ -548,7 +548,7 @@ for conc in [1, 4, 8]:
 
 ### K8s Deployment Status
 
-Tested on K3s cluster (chi2894 master, 8 worker nodes):
+Tested on K3s cluster (<k8s-master> master, 8 worker nodes):
 
 | Component | Status | Details |
 |-----------|--------|---------|
@@ -578,8 +578,8 @@ Tested on K3s cluster (chi2894 master, 8 worker nodes):
 docker run --rm -it \
     --device=/dev/kfd --device=/dev/dri \
     --group-add video --shm-size 256G --ipc=host --privileged \
-    -v /mnt/vast/john/rocm-dynamo:/workspace \
-    -v /mnt/vast/john/hf_cache:/root/.cache/huggingface \
+    -v /path/to/dynamo:/workspace \
+    -v /path/to/hf_cache:/root/.cache/huggingface \
     amdprimus/dynamo-rocm-sglang:latest bash
 
 # Inside: install vLLM ROCm wheel

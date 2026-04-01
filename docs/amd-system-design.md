@@ -60,7 +60,7 @@ flowchart TB
 
 ## 2. AMD Additive Changes
 
-Every change lives on the `amd-additive` branch. Nothing is removed from upstream.
+Every change lives on the `amd-dynamo` branch. Nothing is removed from upstream.
 
 ```mermaid
 flowchart LR
@@ -74,7 +74,7 @@ flowchart LR
         u6["Planner"]
     end
 
-    subgraph AMD["AMD Additive – 76 files, +8266 lines"]
+    subgraph AMD["AMD Additive – additive changes only"]
         direction TB
         a1["🔧 block_size fix<br>multi_worker.rs"]
         a2["🆕 HIP kernels<br>tensor_kernels.hip"]

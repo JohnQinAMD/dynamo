@@ -155,7 +155,7 @@ pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio \
     prophet boto3 kubernetes_asyncio
 ```
 
-**Verified**: 164 tests pass, 42 skipped (expected), on MI355X with this recipe.
+**Verified**: 190+ tests pass, 42 skipped (expected), on MI355X with this recipe.
 
 ---
 
@@ -239,7 +239,7 @@ bash scripts/patch_mooncake_rocm.sh
 
 Complete steps to run disaggregated serving across 2 MI355X nodes.
 
-**Prerequisites**: Two nodes (e.g. `chi2899`, `chi2900`) with matching ionic subnets, model on shared storage.
+**Prerequisites**: Two nodes (e.g. `<prefill-node>`, `<decode-node>`) with matching ionic subnets, model on shared storage.
 
 **Step 1 — Start containers on both nodes:**
 
@@ -249,7 +249,7 @@ docker run -d --name dynamo-worker \
     --network=host --privileged \
     --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
     --group-add video --shm-size 256G --ipc=host \
-    -v /mnt/vast/john/rocm-dynamo:/workspace \
+    -v /path/to/dynamo:/workspace \
     -v /path/to/models:/models:ro \
     rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2 \
     sleep 86400
@@ -263,10 +263,10 @@ for i in 0 1 2 3 4 5 6 7; do
     [ -n "$gid" ] && echo "ionic_$i  $(echo $gid | cut -d: -f1-4)"
 done
 # Match devices with the same subnet prefix between nodes
-# Example: chi2899 ionic_2 (:0148) <-> chi2900 ionic_0 (:0148)
+# Example: <prefill-node> ionic_2 (:0148) <-> <decode-node> ionic_0 (:0148)
 ```
 
-**Step 3 — Prefill node** (e.g. `chi2899`): start etcd, NATS, frontend, prefill worker:
+**Step 3 — Prefill node** (e.g. `<prefill-node>`): start etcd, NATS, frontend, prefill worker:
 
 ```bash
 docker exec -it dynamo-worker bash
@@ -309,7 +309,7 @@ python3 -m dynamo.sglang \
     --disaggregation-ib-device ionic_2  # your matched device
 ```
 
-**Step 4 — Decode node** (e.g. `chi2900`): start decode worker pointing to prefill's etcd/NATS:
+**Step 4 — Decode node** (e.g. `<decode-node>`): start decode worker pointing to prefill's etcd/NATS:
 
 ```bash
 docker exec -it dynamo-worker bash
@@ -319,7 +319,7 @@ export RCCL_MSCCL_ENABLE=0
 export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 # Point to prefill node's infrastructure
-PREFILL_IP=<chi2899-ip>
+PREFILL_IP=<<prefill-node>-ip>
 export ETCD_ENDPOINTS="http://${PREFILL_IP}:2379"
 export NATS_SERVER="nats://${PREFILL_IP}:4222"
 
@@ -707,7 +707,7 @@ dynamo/
     └── operator/config/crd/       # K8s CRDs
 ```
 
-**Branch**: `amd-additive` — 99.4% additive, upstream-rebaseable via `git rebase`.
+**Branch**: `amd-dynamo` — 99.4% additive, upstream-rebaseable via `git rebase`.
 
 ---
 
