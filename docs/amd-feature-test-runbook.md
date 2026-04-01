@@ -560,7 +560,7 @@ Tested on K3s cluster (chi2894 master, 8 worker nodes):
 | **AMD GPU Operator** | ✅ 37 pods | Controller, KMM, NFD, device-plugin, metrics |
 | **AMD Network Operator** | ✅ Running | Pensando ionic NIC management |
 | **DGD dry-run (AMD)** | ✅ 2/2 PASS | `rocm_agg.yaml` + `rocm_disagg.yaml` |
-| **GPU availability** | ⚠️ 0 on most nodes | GPUs consumed by Slurm jobs; chi2895 has 8 |
+| **GPU availability** | ⚠️ Varies | Restart device-plugin after freeing Slurm jobs: `kubectl delete pod -n kube-amd-gpu -l app=default-device-plugin` |
 
 ### vLLM Backend Status
 
@@ -596,4 +596,4 @@ pip install nixl  # or build from source
 |---------|-----------|-------------|-------|
 | **MoRI RDMA** | 73ms | 81.7 | `--disaggregation-transfer-backend mori --disaggregation-ib-device <dev>` |
 | **Mooncake + staging** | 85ms | 61.1 | `SGLANG_MOONCAKE_ROCM_STAGING=1 --disaggregation-transfer-backend mooncake` |
-| **RIXL + C++ staging** | ~500ms | — | `UCX_TLS=rc_v,tcp SGLANG_USE_AITER=0 --disaggregation-transfer-backend nixl --attention-backend triton --disable-cuda-graph` |
+| **RIXL + DRAM staging** | — | — | `SGLANG_NIXL_ROCM_STAGING=1 --disaggregation-transfer-backend nixl` |
