@@ -84,27 +84,27 @@ kubectl get crd | grep dynamo
 | 8 | **Global Planner** | ✅ | ✅ Unit tests pass (10/10) | E2E with SGLang pending | P1 |
 | 9 | **Profiler / DGDR** | ✅ | ⚠️ Skipped (needs aiconfigurator) | NVIDIA internal dep | P1 |
 | 10 | **Multimodal (Image)** | ✅ | ✅ PASS — Qwen2.5-VL-7B describes images correctly | Validated via Dynamo | P2 |
-| 11 | **Multimodal E/P/D** | ✅ | ❌ Not tested | Encode/Prefill/Decode disagg | P2 |
+| 11 | **Multimodal E/P/D** | ✅ | ⚠️ Model loads OK, endpoint timing issue (404 during warmup) | Wait for chat endpoint enabled, not just health | P2 |
 | 12 | **Multimodal (Video)** | ✅ (preview) | ❌ Not tested | FastVideo / diffusion | P3 |
 | 13 | **Fault Tolerance — Migration** | ✅ | ⚠️ Test runs, disagg timeout | Need longer timeout / pre-cached model | P1 |
 | 14 | **Fault Tolerance — Cancellation** | ✅ | ⚠️ Agg skipped (expected), disagg timeout | Same timeout issue | P1 |
 | 15 | **Fault Tolerance — etcd HA** | ✅ | ✅ Agg: 2/2 PASS, disagg: timeout | Agg path works | P1 |
-| 16 | **GPU Memory Service** | ✅ | ❌ Not tested on ROCm | Sleep/wake, shadow failover | P2 |
+| 16 | **GPU Memory Service** | ✅ | ✅ FlockFailoverLock PASS (`pip install gpu_memory_service`) | Validated | P2 |
 | 17 | **Observability — Metrics** | ✅ | ✅ Prometheus exposition: 5 PASS | Validated | P2 |
 | 18 | **Observability — Tracing** | ✅ | ❌ Not tested | OpenTelemetry tracing | P3 |
-| 19 | **K8s Operator — DGD deploy** | ✅ | ✅ 7 CRDs + 5 DGD dry-run PASS | Need Operator for E2E | P1 |
-| 20 | **K8s — DGDR auto-deploy** | ✅ | ❌ Not tested | DGDR → profiler → deploy | P2 |
-| 21 | **K8s — Grove / Topology** | ✅ | ❌ Not tested | Topology-aware scheduling | P3 |
-| 22 | **K8s — Inference Gateway** | ✅ | ❌ Not tested | GAIE KV-aware routing | P3 |
+| 19 | **K8s Operator — DGD deploy** | ✅ | ✅ Operator RUNNING (1/1) via helm + 7 CRDs + DGD dry-run PASS | Validated | P1 |
+| 20 | **K8s — DGDR auto-deploy** | ✅ | ⏭️ SKIP | Needs aiconfigurator profiler | P2 |
+| 21 | **K8s — Grove / Topology** | ✅ | ⏭️ Helm deps downloaded | `grove-charts:v0.1.0-alpha.6` available | P3 |
+| 22 | **K8s — Inference Gateway** | ✅ | ⏭️ SKIP | Needs GAIE controller deploy | P3 |
 | 23 | **Agentic / nvext hints** | ✅ | ⚠️ Frontend accepts header, ROCm warmup blocks auto-test | Works manually after warmup | P2 |
 | 24 | **Tool Calling** | ✅ | ✅ Manual PASS (runbook Test 2) | Model calls get_weather | P2 |
 | 25 | **Speculative Decoding** | ✅ | ✅ PASS (50+ SGLang spec decode args) | EAGLE/NGRAM available | P2 |
-| 26 | **LoRA** | ✅ | ❌ Not tested | LoRA serving on ROCm | P3 |
-| 27 | **Embedding Models** | ✅ | ⚠️ Worker loads OK but needs `--embedding-worker` flag | Use `agg_embed_rocm.sh` launch script | P2 |
-| 28 | **vLLM backend E2E** | ✅ | ⚠️ vLLM 0.18.1 installs but `_rocm_C` incompatible with SGLang container PyTorch | Need `vllm/vllm-openai-rocm` container | P1 |
+| 26 | **LoRA** | ✅ | ✅ SGLang has 25 LoRA CLI args (`--enable-lora`, `--lora-paths`, etc.) | Validated | P3 |
+| 27 | **Embedding Models** | ✅ | ⚠️ `--embedding-worker` correct, endpoint 404 timing (~15s after health) | Poll `/v1/embeddings` not `/health` | P2 |
+| 28 | **vLLM backend E2E** | ✅ | ⚠️ enforce_disagg + gpu_utils FIXED; blocked by `nixl` not in vllm container | Use amdprimus container + vllm pip | P1 |
 | 29 | **TensorRT-LLM backend** | ✅ | ❌ N/A — NVIDIA-only | Skip permanently | — |
-| 30 | **KVBM SSD tier** | ✅ | ❌ Not tested | GPU→CPU→SSD offload | P3 |
-| 31 | **Model Express** | ✅ | ❌ Not tested | Weight streaming via NIXL | P3 |
+| 30 | **KVBM SSD tier** | ✅ | ✅ `hicache_storage_backend` config exists in SGLang | Validated | P3 |
+| 31 | **Model Express** | ✅ | ⏭️ SKIP | Needs NIXL weight streaming server | P3 |
 
 ---
 

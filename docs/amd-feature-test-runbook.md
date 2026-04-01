@@ -457,8 +457,16 @@ for conc in [1, 4, 8]:
 | aiter segfault on MI355X (gfx950) | aiter JIT kernels crash on gfx950 | Set `SGLANG_USE_AITER=0 --attention-backend triton` |
 | Decode can't connect to prefill bootstrap | SGLang `--host` defaults to 127.0.0.1 | Pass `--host 0.0.0.0` |
 | MoRI hangs during init | Ionic subnet mismatch between nodes | Match subnets (Prerequisite 6) |
-| `stdbool.h not found` during build | bindgen can't find GCC headers | Set `BINDGEN_EXTRA_CLANG_ARGS` |
+| `stdbool.h not found` during build | bindgen can't find GCC headers | `export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h \| head -1 \| xargs dirname)"` |
 | 11x slow TTFT on DeepSeek-V3 | aiter MLA persistent kernel conflict | Set `SGLANG_AITER_MLA_PERSIST=False` |
+| `gpu_gb_to_total_fraction: failed to query GPU` | `gpu_utils.sh` only calls nvidia-smi | Updated with amd-smi fallback (already in codebase) |
+| `RouterConfig.__new__() got unexpected keyword` | Stale Rust wheel in vLLM container | `maturin build --release --out /tmp/w && pip install /tmp/w/*.whl --force-reinstall` |
+| `HIP_VISIBLE_DEVICES vs CUDA_VISIBLE_DEVICES` mismatch | vLLM 0.18.1 validates env var consistency | Don't set `HIP_VISIBLE_DEVICES` when running vLLM tests |
+| `No module named 'nixl'` in vLLM container | vllm-openai-rocm doesn't include nixl | Use `amdprimus/dynamo-rocm-sglang` container instead |
+| `/v1/embeddings` returns 404 after health OK | Embedding endpoint registers ~15s after `/health` passes | Poll `/v1/embeddings` with retry, not just `/health` |
+| First inference takes 5+ minutes | aiter JIT compile (~135s) + CUDA graph capture (~120s) on ROCm | Send warmup request with 15min timeout; subsequent requests are fast |
+| `PytestAssertRewriteWarning: anyio` crashes pytest | Container pre-imports anyio | `python3 -m pytest --override-ini=filterwarnings=default` |
+| Upstream serve test `ReadTimeout 60s` | `BasePayload.timeout=60` too short for ROCm warmup | Use `test_sglang_rocm.py` with `_with_rocm_timeout(180)` |
 
 ---
 
@@ -522,35 +530,64 @@ for conc in [1, 4, 8]:
 - Container PID namespace: Docker isolation (1 test)
 - JetStream storage: NATS `/tmp` space in container (1 test)
 
+### Known Issues & Fixes
+
+| Issue | Root Cause | Fix | Status |
+|-------|-----------|-----|--------|
+| `gpu_gb_to_total_fraction: failed to query GPU` | `gpu_utils.sh` hardcodes `nvidia-smi` | Added `amd-smi` fallback with JSON parsing | **Fixed** |
+| `RouterConfig.__new__() got unexpected keyword 'enforce_disagg'` | Rust wheel version mismatch in vLLM container | `maturin build --release` + `pip install wheel` (not `maturin develop`) | **Fixed** |
+| `HIP_VISIBLE_DEVICES='0' vs CUDA_VISIBLE_DEVICES='1'` | vLLM 0.18.1 validates HIP==CUDA env vars | Don't pass `HIP_VISIBLE_DEVICES` in Docker env; let test fixture manage it | **Fixed** |
+| `No module named 'nixl'` in vLLM container | `vllm/vllm-openai-rocm` doesn't include nixl/RIXL | Use `amdprimus/dynamo-rocm-sglang` container (has nixl) + install vLLM | **Workaround** |
+| Embedding `/v1/embeddings` returns 404 | Endpoint registers ~15s after `/health` passes | Wait for `/v1/embeddings` to return non-404, not just `/health` | **Fixed in script** |
+| VL model warmup returns 404 | `/v1/chat/completions` enabled ~1s after `/v1/models` shows model | Poll `/v1/chat/completions` with retry, not single curl | **Known** |
+| aiter JIT compilation ~135s | First inference triggers HIP kernel JIT build | Pre-warm with dummy request; allow 10+ min for first inference | **Known** |
+| CUDA graph capture ~120s | SGLang captures graphs for batch sizes 1-512 | Expected on ROCm; no fix needed, just wait | **Expected** |
+| `PytestAssertRewriteWarning: Module already imported; anyio` | Container pre-imports anyio before pytest assertion rewrite | `--override-ini=filterwarnings=default` | **Fixed** |
+| `dynamo.indexer is not available in this build` | Rust binary not compiled with `--features kv-indexer` | Rebuild with `cargo build --features kv-indexer` | **Known** |
+| block_size=1 KV Router timeout | Upstream KV Router requires block_size >= 2 for hash | Marked as `xfail` in regression test | **xfail** |
+
+### K8s Deployment Status
+
+Tested on K3s cluster (chi2894 master, 8 worker nodes):
+
+| Component | Status | Details |
+|-----------|--------|---------|
+| **Dynamo CRDs** | ✅ 7/7 installed | `kubectl apply --server-side` |
+| **Dynamo Operator** | ✅ Running (1/1) | `helm upgrade --install` with operator-only |
+| **Dynamo Planner** | ✅ Running (1/1) | Deployed in `dynamo` namespace |
+| **etcd** | ✅ Running | StatefulSet in `dynamo` namespace |
+| **NATS** | ✅ Running | Deployment in `dynamo` namespace |
+| **AMD GPU Operator** | ✅ 37 pods | Controller, KMM, NFD, device-plugin, metrics |
+| **AMD Network Operator** | ✅ Running | Pensando ionic NIC management |
+| **DGD dry-run (AMD)** | ✅ 2/2 PASS | `rocm_agg.yaml` + `rocm_disagg.yaml` |
+| **GPU availability** | ⚠️ 0 on most nodes | GPUs consumed by Slurm jobs; chi2895 has 8 |
+
 ### vLLM Backend Status
 
-**Tested with**: `vllm/vllm-openai-rocm:latest` (vLLM 0.18.1, Python 3.12, ROCm 7.0, torch 2.9.1+HIP)
+**Tested with**: `vllm/vllm-openai-rocm:latest` (vLLM 0.18.1, Python 3.12, ROCm 7.0)
 
-**Result**: vLLM engine loads and runs on MI355X, but Dynamo's launch scripts (`examples/common/gpu_utils.sh`) call `nvidia-smi` for GPU memory queries, which fails on ROCm. This causes `test_serve_deployment[aggregated]` to fail at startup.
+**Issues encountered and resolved**:
+1. ~~`gpu_utils.sh` nvidia-smi~~ → **Fixed**: added `amd-smi` fallback
+2. ~~`RouterConfig.enforce_disagg` mismatch~~ → **Fixed**: `maturin build` + `pip install` wheel
+3. ~~`HIP_VISIBLE_DEVICES != CUDA_VISIBLE_DEVICES`~~ → **Fixed**: unset HIP_VISIBLE_DEVICES
+4. **Current blocker**: `No module named 'nixl'` — vLLM container doesn't have nixl/RIXL
 
-**Root cause**: `gpu_gb_to_total_fraction()` in `gpu_utils.sh` (line 364) hardcodes `nvidia-smi --query-gpu=memory.total`. On ROCm, this needs to use `amd-smi` or `rocm-smi` instead. The `rocm_utils.sh` helper exists but isn't wired into `gpu_utils.sh`.
-
-**Workaround**: Skip the memory fraction auto-detection by setting `--mem-fraction-static 0.80` explicitly in launch args (as the ROCm launch scripts `agg_rocm.sh` already do).
-
-**Container setup**:
-
+**Recommended approach** for vLLM on ROCm:
 ```bash
-docker pull vllm/vllm-openai-rocm:latest
-
+# Use amdprimus container (has nixl) + install vLLM
 docker run --rm -it \
     --device=/dev/kfd --device=/dev/dri \
     --group-add video --shm-size 256G --ipc=host --privileged \
     -v /mnt/vast/john/rocm-dynamo:/workspace \
     -v /mnt/vast/john/hf_cache:/root/.cache/huggingface \
-    --entrypoint bash \
-    vllm/vllm-openai-rocm:latest
+    amdprimus/dynamo-rocm-sglang:latest bash
 
-# Inside: build Dynamo (pip install from wheel, no maturin needed)
-cd /workspace/dynamo && pip install -e .
+# Inside: install vLLM ROCm wheel
+pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/
 
-# Run vLLM serve with explicit mem fraction (bypasses nvidia-smi)
-python3 -m dynamo.frontend --http-port 8000 &
-python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B --gpu-memory-utilization 0.80
+# Or use vllm/vllm-openai-rocm with nixl installed:
+docker run --rm -it --entrypoint bash vllm/vllm-openai-rocm:latest
+pip install nixl  # or build from source
 ```
 
 ### Backend Comparison
