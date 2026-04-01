@@ -20,6 +20,15 @@ import pytest
 if not os.path.exists("/opt/rocm"):
     pytest.skip("ROCm serve tests require /opt/rocm", allow_module_level=True)
 
+ROCM_REQUEST_TIMEOUT = 180
+
+
+def _with_rocm_timeout(payloads):
+    """Increase HTTP request timeout for ROCm (CUDA graph compilation is slower)."""
+    for p in payloads:
+        p.timeout = ROCM_REQUEST_TIMEOUT
+    return payloads
+
 from tests.serve.common import (
     WORKSPACE_DIR,
     params_with_model_mark,
@@ -66,11 +75,11 @@ rocm_sglang_configs = {
             "SGLANG_AITER_MLA_PERSIST": "False",
         },
         frontend_port=DefaultPort.FRONTEND.value,
-        request_payloads=[
+        request_payloads=_with_rocm_timeout([
             chat_payload_default(),
             completion_payload_default(),
             metric_payload_default(min_num_requests=4, backend="sglang"),
-        ],
+        ]),
     ),
     "rocm_aggregated_kvbm": SGLangROCmConfig(
         name="rocm_aggregated_kvbm",
@@ -92,10 +101,10 @@ rocm_sglang_configs = {
             "DYN_KVBM_CPU_CACHE_GB": "2",
         },
         frontend_port=DefaultPort.FRONTEND.value,
-        request_payloads=[
+        request_payloads=_with_rocm_timeout([
             chat_payload_default(),
             completion_payload_default(),
-        ],
+        ]),
     ),
 }
 
