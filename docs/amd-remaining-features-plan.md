@@ -96,9 +96,9 @@ kubectl get crd | grep dynamo
 | 20 | **K8s — DGDR auto-deploy** | ✅ | ❌ Not tested | DGDR → profiler → deploy | P2 |
 | 21 | **K8s — Grove / Topology** | ✅ | ❌ Not tested | Topology-aware scheduling | P3 |
 | 22 | **K8s — Inference Gateway** | ✅ | ❌ Not tested | GAIE KV-aware routing | P3 |
-| 23 | **Agentic / nvext hints** | ✅ | ❌ Not tested | Priority, OSL, cache pin | P2 |
-| 24 | **Tool Calling** | ✅ | ✅ Manual test passed (runbook Test 2) | Pytest pending | P2 |
-| 25 | **Speculative Decoding** | ✅ | ⚠️ SGLang has it, not tested via Dynamo | EAGLE/MTP via Dynamo | P2 |
+| 23 | **Agentic / nvext hints** | ✅ | ⚠️ Frontend accepts header, ROCm warmup blocks auto-test | Works manually after warmup | P2 |
+| 24 | **Tool Calling** | ✅ | ✅ Manual PASS (runbook Test 2) | Model calls get_weather | P2 |
+| 25 | **Speculative Decoding** | ✅ | ✅ PASS (50+ SGLang spec decode args) | EAGLE/NGRAM available | P2 |
 | 26 | **LoRA** | ✅ | ❌ Not tested | LoRA serving on ROCm | P3 |
 | 27 | **Embedding Models** | ✅ | ⚠️ Worker loads OK but needs `--embedding-worker` flag | Use `agg_embed_rocm.sh` launch script | P2 |
 | 28 | **vLLM backend E2E** | ✅ | ⚠️ vLLM 0.18.1 installs but `_rocm_C` incompatible with SGLang container PyTorch | Need `vllm/vllm-openai-rocm` container | P1 |
