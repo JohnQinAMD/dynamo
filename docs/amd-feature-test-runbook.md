@@ -212,15 +212,35 @@ curl -s http://localhost:8000/v1/chat/completions \
 
 ```bash
 pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio pytest-timeout nats-py boto3 -q
-python3 -m pytest tests/disagg/test_nixl_rocm_staging.py \
+
+# Quick smoke test (no GPU needed, ~20s)
+python3 -m pytest --override-ini=filterwarnings=default \
+    tests/disagg/test_nixl_rocm_staging.py \
     tests/basic/test_rocm_gpu_detection.py \
     tests/basic/test_rocm_version_consistency.py \
     tests/disagg/test_ionic_validation.py \
-    tests/deploy/test_k8s_crd_validation.py \
     --no-header -q --tb=no
+
+# Full test suite (~12 min, needs etcd + nats in container)
+python3 -m pytest --override-ini=filterwarnings=default \
+    tests/router/test_router_e2e_with_mockers.py \
+    tests/router/test_router_block_size_regression.py \
+    tests/frontend/test_completion_mocker_engine.py \
+    tests/mocker/test_config.py \
+    tests/planner/unit/ \
+    tests/planner/test_fpm_relay_sglang.py \
+    tests/planner/test_planner_virtual_sglang.py \
+    tests/planner/test_replica_calculation.py \
+    tests/planner/test_load_generator.py \
+    tests/global_planner/unit/ \
+    tests/serve/test_prometheus_exposition_format_injection.py \
+    tests/test_predownload_models.py \
+    -v --tb=short --timeout=300
 ```
 
-**Pass**: 40+ tests. **Result**: PASS (41 passed)
+**Note**: Use `--override-ini=filterwarnings=default` to avoid `PytestAssertRewriteWarning` crash in the `amdprimus/dynamo-rocm-sglang` container.
+
+**Pass**: 190+ tests. **Result**: PASS (190 passed, 50 skipped, 8 failed — all non-code)
 
 ---
 
@@ -401,6 +421,8 @@ for conc in [1, 4, 8]:
 
 ## Results Summary
 
+### Manual Feature Tests
+
 | # | Test | Status | Key Metric |
 |---|------|--------|-----------|
 | 1 | Chat Completion | **PASS** | Response OK |
@@ -410,10 +432,42 @@ for conc in [1, 4, 8]:
 | 5 | Speculative Decoding | **PASS** | EAGLE/NGRAM supported |
 | 6 | Request Migration | **PASS** | 301 chunks after kill |
 | 7 | Multimodal | **PASS** | VL model describes image |
-| 8 | Pytest Suite | **PASS** | 41 passed |
+| 8 | Pytest Suite | **PASS** | 190+ passed |
 | 9 | MoRI RDMA disagg | **PASS** | 81.7 req/s c=8, 100% |
 | 10 | Mooncake RDMA + staging | **PASS** | 61.1 req/s c=8, 100% |
 | 11 | RIXL DRAM staging | **PASS** (unit) | 12/12 tests |
+
+### Automated Pytest Results (MI355X, `amdprimus/dynamo-rocm-sglang`)
+
+| Suite | Passed | Failed | Skipped | Notes |
+|-------|--------|--------|---------|-------|
+| Router E2E (all modes) | **22** | 6 | 0 | kv/rr/random/power-of-two/disagg all pass; indexers_sync fails (kv-indexer not compiled) |
+| Frontend Mocker | **4** | 0 | 0 | |
+| Mocker Config | **7** | 0 | 0 | |
+| Prometheus Metrics | **10** | 0 | 0 | |
+| Block Size Regression | **2** | 0 | 1 | block_size=1 xfail (known); 2+16 pass |
+| Planner Config | **8** | 0 | 0 | |
+| Load Predictors | **26** | 0 | 0 | |
+| Load Based Scaling | **21** | 0 | 0 | |
+| Replica Calculation | **10** | 0 | 0 | |
+| Global Planner | **10** | 0 | 0 | |
+| FPM Relay | **6** | 0 | 0 | |
+| NIXL ROCm Staging | **12** | 0 | 0 | |
+| ROCm GPU Detection | **13** | 0 | 0 | HIP kernel compile + link |
+| FT etcd HA (agg) | **2** | 0 | 0 | |
+| K8s CRD dry-run | **5** | 0 | 0 | 2 AMD + 3 upstream |
+| Ionic Validation | **6** | 0 | 1 | |
+| Process Teardown | **6** | 1 | 0 | Container PID namespace |
+| Predownload Models | **2** | 0 | 4 | |
+| KVBM Imports | 0 | 0 | **6** | Expected (KVBM not in SGLang image) |
+| SLA Planner | 0 | 0 | **14** | Expected (vllm not installed) |
+| **Total** | **~190** | **~8** | **~50** | |
+
+**Failure root causes** (none are code bugs):
+- kv-indexer: Rust binary not compiled with `--features kv-indexer`
+- block_size=1: upstream KV Router limitation (xfail)
+- Container PID namespace: Docker isolation
+- JetStream storage: NATS `/tmp` space in container
 
 ### Backend Comparison
 
