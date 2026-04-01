@@ -212,6 +212,79 @@ class _RocmDramStaging:
     def sync(self):
         self._hip.hipDeviceSynchronize()
 
+class _MrLruCache:
+    """LRU cache for RIXL memory registrations on ionic NICs.
+    
+    ionic has ~3GB total MR capacity. Instead of registering/deregistering
+    per transfer (Solution A, ~100ms overhead each), cache recently-used
+    MRs and evict LRU entries when approaching the limit.
+    """
+
+    MAX_REGISTERED_BYTES = 2 * 1024 * 1024 * 1024  # 2GB safety (ionic ~3GB limit)
+
+    def __init__(self, agent):
+        self.agent = agent
+        self._cache = {}  # (addr, size) → (descs, tensor, access_count)
+        self._total_bytes = 0
+        self._access_counter = 0
+
+    def get_or_register(self, host_ptr: int, nbytes: int, tensor):
+        """Return registered descs for (host_ptr, nbytes). Register if not cached."""
+        key = (host_ptr, nbytes)
+        self._access_counter += 1
+
+        if key in self._cache:
+            descs, _, _ = self._cache[key]
+            self._cache[key] = (descs, tensor, self._access_counter)
+            return descs
+
+        # Need to register — evict LRU entries if over budget
+        while self._total_bytes + nbytes > self.MAX_REGISTERED_BYTES and self._cache:
+            self._evict_lru()
+
+        try:
+            descs = self.agent.register_memory([(host_ptr, nbytes, 0, "")], "DRAM")
+            self._cache[key] = (descs, tensor, self._access_counter)
+            self._total_bytes += nbytes
+            return descs
+        except Exception as e:
+            # Registration failed — try evicting more
+            logger.warning("MR registration failed (%s), evicting...", e)
+            while self._cache and self._total_bytes + nbytes > self.MAX_REGISTERED_BYTES:
+                self._evict_lru()
+            try:
+                descs = self.agent.register_memory([(host_ptr, nbytes, 0, "")], "DRAM")
+                self._cache[key] = (descs, tensor, self._access_counter)
+                self._total_bytes += nbytes
+                return descs
+            except Exception:
+                logger.error("MR registration failed even after eviction")
+                return None
+
+    def _evict_lru(self):
+        """Evict the least recently used MR entry."""
+        if not self._cache:
+            return
+        lru_key = min(self._cache, key=lambda k: self._cache[k][2])
+        descs, _, _ = self._cache.pop(lru_key)
+        try:
+            self.agent.deregister_memory(descs)
+        except Exception:
+            pass
+        self._total_bytes -= lru_key[1]
+        logger.debug("MR LRU evict: %s (%d bytes, total now %d)", 
+                     hex(lru_key[0]), lru_key[1], self._total_bytes)
+
+    def clear(self):
+        """Deregister all cached MRs."""
+        for key, (descs, _, _) in list(self._cache.items()):
+            try:
+                self.agent.deregister_memory(descs)
+            except Exception:
+                pass
+        self._cache.clear()
+        self._total_bytes = 0
+
 
 # ---------------------------------------------------------------------------
 # public entry point
@@ -272,30 +345,35 @@ def patch_nixl_for_rocm():
                 else:
                     items = [(int(r[0]), int(r[1])) for r in reqs]
 
+                # Solution B: LRU MR cache — register or reuse cached MRs
+                mr_cache = getattr(self, "_mr_cache", None)
+                all_xfer_tuples = []
+
                 for gpu_addr, nbytes in items:
                     host_ptr, tensor = staging.get_staging_region(gpu_addr, nbytes)
-                    reg_addrs.append((host_ptr, nbytes, 0, ""))
-                    staging_tensors.append(tensor)
 
-                if reg_addrs:
-                    try:
-                        per_xfer_descs = self.agent.register_memory(reg_addrs, "DRAM")
-                        if hasattr(self, "_active_mr_descs"):
-                            self._active_mr_descs.append(per_xfer_descs)
-                        if not hasattr(self, "_staging_tensors"):
-                            self._staging_tensors = []
-                        self._staging_tensors.extend(staging_tensors)
-                    except Exception as e:
-                        logger.warning("Lazy MR registration failed: %s", e)
+                    if mr_cache:
+                        descs = mr_cache.get_or_register(host_ptr, nbytes, tensor)
+                    else:
+                        # Fallback: direct register (no cache)
+                        try:
+                            descs = self.agent.register_memory([(host_ptr, nbytes, 0, "")], "DRAM")
+                        except Exception as e:
+                            logger.warning("MR registration failed: %s", e)
+                            descs = None
 
-                    # Create xfer descs from the registered DRAM addresses
-                    xfer_tuples = [(addr, length, dev) for addr, length, dev, _ in reg_addrs]
-                    return _orig_get(xfer_tuples, "DRAM")
+                    all_xfer_tuples.append((host_ptr, nbytes, 0))
+
+                if all_xfer_tuples:
+                    return _orig_get(all_xfer_tuples, "DRAM")
                 return _orig_get(reqs, mem_type)
             return _orig_get(reqs, mem_type)
 
+        # Create MR LRU cache for prefill-side lazy registration
+        self._mr_cache = _MrLruCache(self.agent)
+
         self.agent.get_xfer_descs = _staging_get_xfer_descs
-        logger.info("ROCm staging: agent.get_xfer_descs wrapped")
+        logger.info("ROCm staging: agent.get_xfer_descs wrapped (LRU MR cache)")
 
     NixlKVManager.__init__ = _patched_mgr_init
 
@@ -448,14 +526,7 @@ def patch_nixl_for_rocm():
             self.kv_mgr._staging_post_copy_h2d(self._staging_kv_indices)
             del self._staging_kv_indices
 
-            # Deregister per-transfer MRs to free ionic MR slots
-            if hasattr(self.kv_mgr, "_active_mr_descs"):
-                for descs in self.kv_mgr._active_mr_descs:
-                    try:
-                        self.kv_mgr.agent.deregister_memory(descs)
-                    except Exception:
-                        pass
-                self.kv_mgr._active_mr_descs.clear()
+            # MR LRU cache handles deregistration — no per-transfer cleanup needed
         return result
 
     NixlKVReceiver.poll = _patched_recv_poll
