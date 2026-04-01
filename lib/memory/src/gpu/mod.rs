@@ -15,6 +15,9 @@
 
 pub mod types;
 
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+compile_error!("Features 'cuda' and 'rocm' are mutually exclusive — enable only one.");
+
 #[cfg(feature = "cuda")]
 pub mod cuda;
 

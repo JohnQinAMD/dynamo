@@ -230,7 +230,7 @@ Prefill Node                          Decode Node
 | **[Build Guide](docs/amd-rocm-build.md)** | Rust bindings, RIXL, HIP kernels |
 | **[System Design](docs/amd-system-design.md)** | Architecture diagrams, additive change strategy |
 | **[Performance Report](docs/amd-performance-report.md)** | 20 benchmarks across 6 MI355X nodes |
-| **[Test Plan](docs/amd-test-plan.md)** | 190+ tests passing, CI matrix for Python 3.10 + 3.12 |
+| **[Test Plan](docs/amd-test-plan.md)** | 195+ tests passing, CI matrix for Python 3.10 + 3.12 |
 | **[Feature Test Runbook](docs/amd-feature-test-runbook.md)** | 11 manual feature tests + troubleshooting guide |
 
 > **Branch**: [`amd-dynamo`](https://github.com/JohnQinAMD/dynamo/tree/amd-dynamo) — 99.4% additive (no upstream code removed), upstream-rebaseable.

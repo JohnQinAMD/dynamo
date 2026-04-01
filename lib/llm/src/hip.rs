@@ -53,6 +53,7 @@ pub trait DynamoHipStreamProvider {
 /// - Automatically manages context lifecycle
 pub struct DynamoHipContextGuard {
     context: ContextHandle,
+    previous_context: Option<ContextHandle>,
     _pin: std::marker::PhantomPinned,
     _not_send_sync: PhantomData<*const ()>,
 }
@@ -60,15 +61,21 @@ pub struct DynamoHipContextGuard {
 impl DynamoHipContextGuard {
     /// Create a new context guard that sets the given context as current.
     ///
+    /// Saves the currently active context and restores it when the guard is
+    /// dropped, matching the push/pop semantics of the CUDA context guard.
+    ///
     /// # Safety
     ///
     /// The caller must ensure the context handle is valid.
     pub unsafe fn new(context: ContextHandle) -> Pin<Box<Self>> {
+        let previous_context = Self::get_current_context();
+
         HipBackend::set_current_context(context)
             .expect("Failed to set HIP context as current");
 
         let guard = Self {
             context,
+            previous_context,
             _pin: std::marker::PhantomPinned,
             _not_send_sync: PhantomData,
         };
@@ -83,14 +90,27 @@ impl DynamoHipContextGuard {
     pub fn context(&self) -> ContextHandle {
         self.context
     }
+
+    fn get_current_context() -> Option<ContextHandle> {
+        let mut ctx: *mut std::ffi::c_void = std::ptr::null_mut();
+        #[link(name = "amdhip64")]
+        extern "C" {
+            fn hipCtxGetCurrent(ctx: *mut *mut std::ffi::c_void) -> i32;
+        }
+        let result = unsafe { hipCtxGetCurrent(&mut ctx) };
+        if result == 0 && !ctx.is_null() {
+            Some(ContextHandle(ctx))
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for DynamoHipContextGuard {
     fn drop(&mut self) {
-        // HIP uses hipCtxSetCurrent rather than push/pop semantics.
-        // Nothing to explicitly pop on drop — the context remains current
-        // until another context is set. This matches HIP runtime behavior
-        // where the primary context is reference-counted.
+        if let Some(prev) = self.previous_context {
+            let _ = HipBackend::set_current_context(prev);
+        }
     }
 }
 

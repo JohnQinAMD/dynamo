@@ -5,6 +5,14 @@
 //!
 //! ROCm equivalent of `executor/cuda.rs`. Uses the GPU HAL's `HipBackend`
 //! for async memcpy operations between host and device memory.
+//!
+//! **Note on `TransferStrategy` naming**: The shared `TransferStrategy` enum uses
+//! CUDA-prefixed variant names (`CudaAsyncH2D`, etc.) because it is defined in
+//! the upstream vendor-neutral `strategy.rs` module. These names describe the
+//! *semantics* (async/blocking, direction) rather than the *backend*. The HIP
+//! executor maps them 1:1 to equivalent HIP APIs. Renaming the shared enum would
+//! break upstream CUDA tests, so we keep the existing names and document the
+//! correspondence here.
 
 use super::TransferContext;
 use super::{PhysicalLayout, TransferStrategy};
@@ -63,7 +71,9 @@ pub fn execute_hip_transfer(
         _ => ctx.h2d_stream(),
     };
 
-    // Convert cudarc CudaStream to raw StreamHandle for HIP HAL
+    // cudarc's CudaStream wraps an opaque handle that is ABI-compatible with
+    // hipStream_t when built against the HIP compatibility layer.  The raw
+    // pointer returned by cu_stream() is valid as a HIP stream handle.
     let stream_handle = StreamHandle(unsafe { stream.cu_stream() as *mut std::ffi::c_void });
 
     match strategy {
@@ -97,6 +107,8 @@ pub fn execute_hip_transfer(
             | TransferStrategy::CudaAsyncD2H
             | TransferStrategy::CudaAsyncD2D
     ) {
+        // Record a HIP event on the stream for async completion notification.
+        // cudarc's record_event uses hipEventRecord under the HIP compat layer.
         let event = stream.record_event(None)?;
         Ok(ctx.register_cuda_event(event))
     } else {

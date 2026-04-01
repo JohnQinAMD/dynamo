@@ -1,0 +1,72 @@
+# DGDR Autoscaling Example — SGLang on AMD ROCm
+#
+# Deploys a SGLang serving graph with autoscaling:
+#   - Frontend (1 replica, fixed)
+#   - SglangWorker (1-4 replicas, scales on GPU utilization)
+#
+# Prerequisites:
+#   - Dynamo Operator + CRDs installed
+#   - AMD GPU Operator with device-plugin
+#   - etcd + NATS in dynamo namespace
+#
+# Apply:
+#   kubectl apply -f dgdr_autoscale_rocm.yaml
+#
+# NOTE: apiVersion nvidia.com/v1alpha1 is the Dynamo CRD API group —
+# vendor-neutral, works on AMD clusters with the Dynamo Operator.
+
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeploymentRequest
+metadata:
+  name: sglang-rocm-autoscale
+  namespace: dynamo
+spec:
+  graphDeploymentName: sglang-rocm-agg
+  scalingPolicy:
+    minReplicas: 1
+    maxReplicas: 4
+    targetGpuUtilization: 70
+    scaleUpCooldown: 60
+    scaleDownCooldown: 120
+    metricsSource: fpm
+---
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: sglang-rocm-agg
+  namespace: dynamo
+spec:
+  services:
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      extraPodSpec:
+        mainContainer:
+          image: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+    SglangWorker:
+      envFromSecret: hf-token-secret
+      componentType: worker
+      replicas: 1
+      envs:
+        - name: DYN_SYSTEM_ENABLED
+          value: "true"
+        - name: SGLANG_AITER_MLA_PERSIST
+          value: "False"
+        - name: RCCL_MSCCL_ENABLE
+          value: "0"
+      extraPodSpec:
+        mainContainer:
+          image: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+          command: ["python3", "-m", "dynamo.sglang"]
+          args:
+            - --model-path
+            - Qwen/Qwen3-0.6B
+            - --tp
+            - "1"
+            - --trust-remote-code
+            - --enable-metrics
+          resources:
+            requests:
+              amd.com/gpu: "1"
+            limits:
+              amd.com/gpu: "1"

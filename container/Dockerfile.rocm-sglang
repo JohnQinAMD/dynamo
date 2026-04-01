@@ -14,6 +14,10 @@
 
 FROM rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
 
+LABEL maintainer="AMD Dynamo Team" \
+      description="Dynamo + SGLang on AMD ROCm (MI300X/MI355X)" \
+      version="1.0"
+
 # --- Stage 1: Build UCX with ROCm support (~3 min) ---
 COPY ucx /tmp/ucx-src
 RUN cd /tmp/ucx-src && \
@@ -58,17 +62,25 @@ ENV LD_LIBRARY_PATH="/opt/rocm/rixl/lib/x86_64-linux-gnu:/usr/local/ucx/lib:${LD
 ENV PYTHONPATH="/opt/rocm/rixl/lib/python3/dist-packages:${PYTHONPATH}"
 ENV NIXL_PREFIX=/opt/rocm/rixl
 
-# --- Stage 3: Build Dynamo (~5 min) ---
+# --- Stage 3: Build Dynamo with kv-indexer (~5 min) ---
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libclang-dev && \
+    rm -rf /var/lib/apt/lists/*
 COPY dynamo /opt/dynamo
 WORKDIR /opt/dynamo
 RUN export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib && \
     export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)" && \
     export VIRTUAL_ENV=/opt/venv && \
-    cd lib/bindings/python && maturin develop --release && \
+    cd lib/bindings/python && \
+    NIXL_PREFIX=/opt/rocm/rixl maturin build --release \
+        --features "kv-indexer,kv-indexer-runtime" \
+        --out /tmp/dist && \
+    /opt/venv/bin/pip install /tmp/dist/ai_dynamo_runtime*.whl && \
+    rm -rf /tmp/dist && \
     cd /opt/dynamo && pip install -e .
 
-# --- Stage 4: Dependencies ---
-RUN pip install --quiet \
+# --- Stage 4: Dependencies (pinned for reproducibility) ---
+COPY dynamo/container/constraints-rocm.txt /tmp/constraints-rocm.txt
+RUN pip install --quiet -c /tmp/constraints-rocm.txt \
     pytest pytest-benchmark pytest-httpserver pytest-asyncio \
     pytest-timeout nats-py boto3 prophet kubernetes_asyncio \
     prometheus_api_client filterpy pmdarima kr8s
@@ -85,7 +97,16 @@ RUN wget -q https://github.com/etcd-io/etcd/releases/download/v3.5.21/etcd-v3.5.
 RUN wget -q https://github.com/nats-io/nats-server/releases/download/v2.10.28/nats-server-v2.10.28-amd64.deb -O /tmp/nats.deb && \
     dpkg -i /tmp/nats.deb && rm /tmp/nats.deb
 
-# --- Stage 5: Ionic ABI auto-fix ---
+# --- Stage 5: Build KVBM HIP kernels ---
+RUN cd /opt/dynamo/lib/kvbm-kernels/hip && \
+    /opt/rocm/bin/hipcc -c -std=c++17 -O3 -fPIC \
+        --offload-arch=gfx942 --offload-arch=gfx950 \
+        tensor_kernels.hip -o /tmp/tensor_kernels.o && \
+    /opt/rocm/bin/hipcc -shared -o /usr/local/lib/libkvbm_kernels_hip.so /tmp/tensor_kernels.o -lamdhip64 && \
+    ldconfig && rm -f /tmp/tensor_kernels.o && \
+    echo "KVBM HIP kernels: OK (gfx942 + gfx950)"
+
+# --- Stage 6: Ionic ABI auto-fix ---
 RUN printf '#!/bin/bash\n\
 # Auto-detect and fix ionic driver ABI mismatch.\n\
 HOST_LIB=$(find /usr/lib/x86_64-linux-gnu -name "libionic.so.1.1.*" 2>/dev/null | sort -V | tail -1)\n\
@@ -101,11 +122,14 @@ RUN python3 -c "from dynamo.llm import ModelType, MockEngineArgs; print('dynamo.
     python3 -c "from mooncake.engine import TransferEngine; print('mooncake OK')" && \
     python3 -c "from nixl._api import nixl_agent; print('nixl/rixl OK')" && \
     python3 -c "import rixl; print('rixl OK')" && \
+    python3 -c "from dynamo.indexer import main; print('kv-indexer OK')" && \
     etcd --version | head -1 && \
     nats-server --version
 
 ENV SGLANG_AITER_MLA_PERSIST=False
 ENV RCCL_MSCCL_ENABLE=0
 ENV MC_MAX_SGE=2
-ENV HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 WORKDIR /opt/dynamo
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python3 -c "from dynamo.llm import ModelType; print('ok')" || exit 1

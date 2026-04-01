@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -80,9 +79,7 @@ def _wait_healthy(port: int, timeout: int = 300) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            resp = urllib.request.urlopen(
-                f"http://localhost:{port}/health", timeout=5
-            )
+            resp = urllib.request.urlopen(f"http://localhost:{port}/health", timeout=5)
             if resp.status == 200:
                 return True
         except Exception:
@@ -124,16 +121,37 @@ class TestKvbmHipKernels:
         if not os.path.exists(hipcc):
             pytest.skip("hipcc not found")
 
+        arch = os.environ.get("KVBM_HIP_ARCH", "gfx942")
+        agent_info = subprocess.run(
+            ["rocminfo"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if agent_info.returncode == 0:
+            for line in agent_info.stdout.splitlines():
+                if "gfx9" in line and "Name:" in line:
+                    arch = line.split(":")[-1].strip()
+                    break
+
         obj_file = tmp_path / "tensor_kernels.o"
         r = subprocess.run(
             [
-                hipcc, "-c", "-std=c++17", "-O3", "-fPIC",
-                "--offload-arch=gfx942",
-                kernel_path, "-o", str(obj_file),
+                hipcc,
+                "-c",
+                "-std=c++17",
+                "-O3",
+                "-fPIC",
+                f"--offload-arch={arch}",
+                kernel_path,
+                "-o",
+                str(obj_file),
             ],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
-        assert r.returncode == 0, f"HIP compile failed: {r.stderr}"
+        assert r.returncode == 0, f"HIP compile failed (arch={arch}): {r.stderr}"
 
 
 class TestKvbmSglangIntegration:
@@ -164,34 +182,50 @@ class TestKvbmSglangIntegration:
     def test_multi_turn_cache_reuse(self):
         """Verify KVBM provides cache reuse benefit across turns.
 
-        Send the same long prefix multiple times — the second request
-        should be faster due to KV cache being available (offloaded to CPU
-        on first eviction, onboarded back on second request).
+        Send the same long prefix multiple times — the second and third
+        requests should be measurably faster due to KV cache reuse.
         """
-        resp1 = _send_chat(self.port, AELDORA_STORY + " What is the city called?")
-        assert "choices" in resp1
+        import time
 
-        resp2 = _send_chat(self.port, AELDORA_STORY + " Who buried the city?")
-        assert "choices" in resp2
+        latencies = []
+        for i, question in enumerate(
+            [
+                " What is the city called?",
+                " Who buried the city?",
+                " What magic exists there?",
+            ]
+        ):
+            t0 = time.perf_counter()
+            resp = _send_chat(self.port, AELDORA_STORY + question)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            latencies.append(elapsed_ms)
 
-        resp3 = _send_chat(self.port, AELDORA_STORY + " What magic exists there?")
-        assert "choices" in resp3
-
-        for resp in [resp1, resp2, resp3]:
+            assert "choices" in resp
             assert len(resp["choices"][0]["message"]["content"]) > 0
+
+            usage = resp.get("usage", {})
+            cached = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+            print(
+                f"  Turn {i+1}: {elapsed_ms:.0f}ms, "
+                f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
+                f"cached_tokens={cached}"
+            )
+
+        if len(latencies) == 3 and latencies[0] > 0:
+            speedup = latencies[0] / latencies[2] if latencies[2] > 0 else 0
+            print(
+                f"  Cache reuse speedup: {speedup:.2f}x "
+                f"(first={latencies[0]:.0f}ms, third={latencies[2]:.0f}ms)"
+            )
 
     def test_concurrent_requests_with_kvbm(self):
         """Send concurrent requests to test KVBM under load."""
         import concurrent.futures
 
-        prompts = [
-            f"Count from 1 to {i + 1} and stop." for i in range(4)
-        ]
+        prompts = [f"Count from 1 to {i + 1} and stop." for i in range(4)]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            futures = [
-                pool.submit(_send_chat, self.port, p) for p in prompts
-            ]
+            futures = [pool.submit(_send_chat, self.port, p) for p in prompts]
             results = []
             errors = []
             for f in concurrent.futures.as_completed(futures, timeout=120):

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Test ROCm DRAM staging monkey-patch for SGLang nixl connector.
 
@@ -16,8 +15,17 @@ import os
 import sys
 import unittest
 
+import pytest
+
 # Ensure dynamo components are importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../components/src"))
+
+pytestmark = [
+    pytest.mark.rocm,
+    pytest.mark.unit,
+    pytest.mark.pre_merge,
+    pytest.mark.gpu_0,
+]
 
 
 class TestRocmDramStagingUnit(unittest.TestCase):
@@ -25,8 +33,9 @@ class TestRocmDramStagingUnit(unittest.TestCase):
 
     def _make_staging(self):
         """Create a staging instance with mock buffers (no GPU needed)."""
-        from dynamo.sglang.nixl_rocm_staging import _RocmDramStaging
         import torch
+
+        from dynamo.sglang.nixl_rocm_staging import _RocmDramStaging
 
         staging = object.__new__(_RocmDramStaging)
         staging.buffers = {}
@@ -60,8 +69,8 @@ class TestRocmDramStagingUnit(unittest.TestCase):
         reqs = np.array(
             [
                 [gpu_a + 100, 256, 3],  # in buf_a → should translate
-                [gpu_b + 50, 128, 3],   # in buf_b → should translate
-                [0xAAAA, 64, 5],         # not in any buffer → pass through
+                [gpu_b + 50, 128, 3],  # in buf_b → should translate
+                [0xAAAA, 64, 5],  # not in any buffer → pass through
             ],
             dtype=np.int64,
         )
@@ -114,8 +123,9 @@ class TestRocmDramStagingGPU(unittest.TestCase):
             raise unittest.SkipTest("No GPU available")
 
     def test_create_staging_buffer(self):
-        from dynamo.sglang.nixl_rocm_staging import _RocmDramStaging
         import torch
+
+        from dynamo.sglang.nixl_rocm_staging import _RocmDramStaging
 
         staging = _RocmDramStaging()
 
@@ -131,8 +141,9 @@ class TestRocmDramStagingGPU(unittest.TestCase):
         self.assertEqual(stored_size, size)
 
     def test_copy_d2h_and_h2d_roundtrip(self):
-        from dynamo.sglang.nixl_rocm_staging import _RocmDramStaging
         import torch
+
+        from dynamo.sglang.nixl_rocm_staging import _RocmDramStaging
 
         staging = _RocmDramStaging()
 
@@ -141,7 +152,7 @@ class TestRocmDramStagingGPU(unittest.TestCase):
         gpu_ptr = original.data_ptr()
         nbytes = original.nelement() * original.element_size()
 
-        host_ptr = staging.create(gpu_ptr, nbytes)
+        staging.create(gpu_ptr, nbytes)
 
         # GPU → DRAM
         staging.copy_d2h(gpu_ptr, nbytes)
@@ -213,16 +224,14 @@ class TestMonkeyPatchIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            from sglang.srt.disaggregation.nixl.conn import NixlKVManager
+            from sglang.srt.disaggregation.nixl.conn import NixlKVManager  # noqa: F401
         except ImportError:
             raise unittest.SkipTest("sglang not installed")
 
     def test_methods_are_patched(self):
+        from sglang.srt.disaggregation.nixl.conn import NixlKVManager, NixlKVReceiver
+
         import dynamo.sglang.nixl_rocm_staging as mod
-        from sglang.srt.disaggregation.nixl.conn import (
-            NixlKVManager,
-            NixlKVReceiver,
-        )
 
         mod._PATCHED = False
         mod._STAGING_ENABLED = True
@@ -231,6 +240,7 @@ class TestMonkeyPatchIntegration(unittest.TestCase):
         # Verify register_buffer_to_engine was replaced
         # (original has "VRAM" in source, patched doesn't)
         import inspect
+
         src = inspect.getsource(NixlKVManager.register_buffer_to_engine)
         self.assertIn("DRAM", src)
         self.assertNotIn('"VRAM"', src)

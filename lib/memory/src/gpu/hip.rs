@@ -41,9 +41,20 @@ const HIP_MEMCPY_DEFAULT: i32 = 4;
 /// HIP's full struct is very large (~800+ bytes). We only access `name` and
 /// `totalGlobalMem`; the trailing padding ensures we pass a buffer at least as
 /// large as the real struct so the driver doesn't write out of bounds.
+///
+/// Layout from hip_runtime_api.h:
+///   char name[256]           — offset 0
+///   hipUUID uuid             — offset 256 (16 bytes)
+///   char luid[8]             — offset 272
+///   unsigned int luidMask    — offset 280
+///   size_t totalGlobalMem    — offset 288 (with 4 bytes alignment padding)
 #[repr(C)]
 struct HipDeviceProperties {
     name: [c_char; 256],
+    _uuid: [u8; 16],
+    _luid: [u8; 8],
+    _luid_device_node_mask: u32,
+    _pad_align: u32,
     total_global_mem: usize,
     _padding: [u8; 2048],
 }
@@ -77,6 +88,7 @@ extern "C" {
         stream: *mut c_void,
     ) -> i32;
     fn hipGetDeviceProperties(prop: *mut HipDeviceProperties, device: c_int) -> i32;
+    fn hipDeviceTotalMem(bytes: *mut usize, device: c_int) -> i32;
     fn hipGetErrorString(error: i32) -> *const c_char;
 }
 
@@ -285,8 +297,11 @@ impl super::GpuDevice for HipBackend {
     }
 
     fn total_memory(device_id: i32) -> GpuResult<usize> {
-        let mut props: HipDeviceProperties = unsafe { std::mem::zeroed() };
-        check(unsafe { hipGetDeviceProperties(&mut props, device_id) })?;
-        Ok(props.total_global_mem)
+        // Use hipDeviceTotalMem() instead of hipGetDeviceProperties() to avoid
+        // dependence on the HipDeviceProperties struct layout, which has changed
+        // between ROCm versions (see BUG-1). This single-purpose API is stable.
+        let mut bytes: usize = 0;
+        check(unsafe { hipDeviceTotalMem(&mut bytes, device_id) })?;
+        Ok(bytes)
     }
 }

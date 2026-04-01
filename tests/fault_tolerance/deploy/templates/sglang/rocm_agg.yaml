@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Aggregated SGLang deployment on AMD MI355X GPUs.
+# NOTE: apiVersion nvidia.com/v1alpha1 is the Dynamo CRD API group — it is
+# vendor-neutral and works on AMD clusters with the Dynamo Operator installed.
 
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment

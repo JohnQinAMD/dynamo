@@ -1,45 +1,51 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+# Embedding model serving on ROCm with SGLang + Dynamo
 #
-# Aggregated embedding model serving on AMD ROCm.
-# Usage: DEVICE_PLATFORM=rocm bash agg_embed_rocm.sh [--model-path <name>]
+# Uses --embedding-worker flag (not --is-embedding) for proper route registration.
+#
+# Prerequisites:
+#   - AMD GPU available
+#   - etcd + NATS running
+#   - Model: Qwen/Qwen3-Embedding-4B
+#
+# Usage:
+#   export ETCD_ENDPOINTS=http://localhost:2379
+#   export NATS_SERVER=nats://localhost:4222
+#   bash examples/backends/sglang/launch/rocm/agg_embed_rocm.sh
 
-set -e
-trap 'echo Cleaning up...; kill 0' EXIT
+set -euo pipefail
 
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-source "$SCRIPT_DIR/../../../../common/rocm_utils.sh"
-source "$SCRIPT_DIR/../../../../common/launch_utils.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../../common/gpu_utils.sh"
 
-export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0}"
+MODEL="${MODEL:-Qwen/Qwen3-Embedding-4B}"
+FRONTEND_PORT="${FRONTEND_PORT:-8000}"
 
-MODEL="Qwen/Qwen3-Embedding-4B"
+export SGLANG_AITER_MLA_PERSIST=False
+export RCCL_MSCCL_ENABLE=0
 
-EXTRA_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --model-path) MODEL="$2"; shift 2 ;;
-        *) EXTRA_ARGS+=("$1"); shift ;;
-    esac
+echo "=== Embedding Model on ROCm ==="
+echo "Model: $MODEL"
+
+python3 -m dynamo.frontend --http-port "$FRONTEND_PORT" --router-mode round-robin &
+sleep 2
+
+HIP_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
+    --model-path "$MODEL" --tp-size 1 --trust-remote-code \
+    --embedding-worker &
+
+echo "Waiting for embedding endpoint..."
+for i in $(seq 1 120); do
+    status=$(curl -sf -o /dev/null -w '%{http_code}' \
+        "http://localhost:$FRONTEND_PORT/v1/embeddings" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"$MODEL\",\"input\":\"test\"}" 2>/dev/null || echo "000")
+    [ "$status" != "404" ] && [ "$status" != "000" ] && break
+    sleep 2
 done
 
-HTTP_PORT="${DYN_HTTP_PORT:-8000}"
-print_launch_banner --no-curl "Launching ROCm Embedding Worker" "$MODEL" "$HTTP_PORT" \
-    "HIP devices: $HIP_VISIBLE_DEVICES"
+echo ""
+echo "=== Embedding Endpoint Ready ==="
+echo "Test: curl http://localhost:$FRONTEND_PORT/v1/embeddings -H 'Content-Type: application/json' -d '{\"model\":\"$MODEL\",\"input\":\"Hello world\"}'"
 
-python3 -m dynamo.frontend &
-
-DYN_SYSTEM_PORT=${DYN_SYSTEM_PORT:-8081} \
-python3 -m dynamo.sglang \
-  --embedding-worker \
-  --model-path "$MODEL" \
-  --served-model-name "$MODEL" \
-  --page-size 16 \
-  --tp 1 \
-  --trust-remote-code \
-  --use-sglang-tokenizer \
-  --enable-metrics \
-  "${EXTRA_ARGS[@]}" &
-
-wait_any_exit
+wait

@@ -2,7 +2,7 @@
 
 > Comprehensive plan to bring NVIDIA Dynamo's 68-file test suite to full ROCm coverage on MI300X / MI325X / MI355X.
 
-**Status**: **190+ tests pass on MI355X** (~50 skipped, ~8 failed — all non-code issues). Validated using `amdprimus/dynamo-rocm-sglang:latest`.
+**Status**: **195+ tests pass on MI355X** (~50 skipped, ~3 failed — all non-code issues). Validated using `amdprimus/dynamo-rocm-sglang:latest`.
 
 ---
 
@@ -11,7 +11,7 @@
 | Metric | Count | Notes |
 |--------|-------|-------|
 | Total test files (`dynamo/tests/`) | 68+ | Upstream + AMD-additive tests |
-| Tests passing on MI355X | **190+** | Full suite on `amdprimus/dynamo-rocm-sglang` |
+| Tests passing on MI355X | **195+** | Full suite on `amdprimus/dynamo-rocm-sglang` |
 | Tests skipped (expected) | **42** | vLLM not installed (34), RIXL not in image (2), ionic in Docker (1), env vars (5) |
 | Tests blocked (NVIDIA-only) | **20** | TRT-LLM (6), vLLM Python 3.12 gap (14) |
 | Manual ROCm tests (performance report) | 20 | Includes DRAM staging + mooncake patch |

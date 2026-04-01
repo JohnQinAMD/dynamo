@@ -32,7 +32,6 @@ Data flow with patch active:
 
 from __future__ import annotations
 
-import ctypes
 import logging
 import os
 import struct
@@ -62,159 +61,16 @@ _PATCHED = False  # guard against double-patch
 
 
 # ---------------------------------------------------------------------------
-# DRAM staging pool
+# DRAM staging pool — shared implementation (after _IS_ROCM detection)
 # ---------------------------------------------------------------------------
-class _RocmDramStaging:
-    """Pinned host mirrors for GPU VRAM buffers.
+from dynamo.sglang.rocm_dram_staging_common import (  # noqa: E402
+    RocmDramStaging as _RocmDramStaging,
+)
 
-    Each GPU buffer gets a same-sized pinned host allocation.  Addresses
-    are translated 1:1 (gpu_base+offset → host_base+offset) so all
-    existing index arithmetic in the connector is preserved.
-    """
-
-    def __init__(self):
-        try:
-            self._hip = ctypes.CDLL("libamdhip64.so")
-        except OSError:
-            raise RuntimeError(
-                "libamdhip64.so not found — ROCm DRAM staging requires the HIP runtime"
-            )
-        # gpu_base → (pinned_tensor, host_ptr, size)
-        self.buffers: dict[int, tuple] = {}
-
-    def create(self, gpu_ptr: int, size: int, allocate: bool = True) -> int:
-        """Create a DRAM staging buffer for gpu_ptr.
-        
-        Args:
-            gpu_ptr: GPU buffer base address
-            size: buffer size in bytes
-            allocate: if True, allocate pinned DRAM now (decode side needs stable addresses).
-                      if False, lazy mode — only record metadata (prefill side).
-        Returns:
-            host_ptr if allocated, or gpu_ptr as placeholder if lazy.
-        """
-        if allocate:
-            import torch
-            t = torch.empty(size, dtype=torch.uint8, device="cpu").pin_memory()
-            host_ptr = t.data_ptr()
-            self.buffers[gpu_ptr] = (t, host_ptr, size)
-            logger.info(
-                "ROCm DRAM staging: %d MB  GPU %s → host %s",
-                size // (1024 * 1024), hex(gpu_ptr), hex(host_ptr),
-            )
-            return host_ptr
-        else:
-            self.buffers[gpu_ptr] = (None, gpu_ptr, size)
-            logger.info(
-                "ROCm DRAM staging: %d MB GPU %s (lazy — no allocation)",
-                size // (1024 * 1024), hex(gpu_ptr),
-            )
-            return gpu_ptr
-
-    def get_staging_region(self, gpu_addr: int, nbytes: int):
-        """Allocate a small pinned DRAM region for a single transfer chunk.
-        Returns (host_ptr, tensor) — caller must keep tensor alive until transfer completes.
-        """
-        import torch
-        t = torch.empty(nbytes, dtype=torch.uint8, device="cpu").pin_memory()
-        host_ptr = t.data_ptr()
-        # Copy GPU → DRAM
-        self.copy_d2h_direct(gpu_addr, host_ptr, nbytes)
-        self.sync()
-        return host_ptr, t
-
-    def copy_d2h_direct(self, gpu_addr: int, host_addr: int, nbytes: int):
-        """hipMemcpy D2H between arbitrary addresses."""
-        self._hip.hipMemcpy(
-            ctypes.c_void_p(host_addr),
-            ctypes.c_void_p(gpu_addr),
-            ctypes.c_size_t(nbytes),
-            ctypes.c_int(2),  # D2H
-        )
-
-    def copy_h2d_direct(self, host_addr: int, gpu_addr: int, nbytes: int):
-        """hipMemcpy H2D between arbitrary addresses."""
-        self._hip.hipMemcpy(
-            ctypes.c_void_p(gpu_addr),
-            ctypes.c_void_p(host_addr),
-            ctypes.c_size_t(nbytes),
-            ctypes.c_int(1),  # H2D
-        )
-
-    # -- address translation --------------------------------------------------
-
-    def translate_base(self, gpu_ptr: int) -> int:
-        e = self.buffers.get(gpu_ptr)
-        return e[1] if e else gpu_ptr
-
-    def translate_ptrs(self, ptrs: list) -> list:
-        return [self.translate_base(p) for p in ptrs]
-
-    def translate_reqs(self, reqs):
-        """Translate GPU addrs → DRAM staging addrs.
-
-        Accepts an (N,3) numpy array **or** a list of (addr,len,dev[,tag]) tuples.
-        Non-matching addresses (e.g. remote dst) pass through unchanged.
-        """
-        if isinstance(reqs, np.ndarray):
-            if reqs.size == 0:
-                return reqs
-            result = reqs.copy()
-            for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-                mask = (result[:, 0] >= gpu_base) & (
-                    result[:, 0] < gpu_base + buf_size
-                )
-                result[mask, 0] = result[mask, 0] - gpu_base + host_base
-                result[mask, 2] = 0  # CPU device
-            return result
-
-        out = []
-        for item in reqs:
-            addr, length, dev = item[0], item[1], item[2]
-            for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-                if gpu_base <= addr < gpu_base + buf_size:
-                    addr = addr - gpu_base + host_base
-                    dev = 0
-                    break
-            out.append(
-                (addr, length, dev) if len(item) == 3 else (addr, length, dev, item[3])
-            )
-        return out
-
-    # -- GPU ↔ DRAM copies ----------------------------------------------------
-
-    def copy_d2h(self, gpu_addr: int, nbytes: int):
-        """hipMemcpy Device→Host.  Silently skips addresses not in any buffer."""
-        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-            if gpu_base <= gpu_addr < gpu_base + buf_size:
-                offset = gpu_addr - gpu_base
-                self._hip.hipMemcpy(
-                    ctypes.c_void_p(host_base + offset),
-                    ctypes.c_void_p(gpu_addr),
-                    ctypes.c_size_t(nbytes),
-                    ctypes.c_int(2),  # hipMemcpyDeviceToHost
-                )
-                return
-
-    def copy_h2d(self, gpu_addr: int, nbytes: int):
-        """hipMemcpy Host→Device.  Silently skips addresses not in any buffer."""
-        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-            if gpu_base <= gpu_addr < gpu_base + buf_size:
-                offset = gpu_addr - gpu_base
-                self._hip.hipMemcpy(
-                    ctypes.c_void_p(gpu_addr),
-                    ctypes.c_void_p(host_base + offset),
-                    ctypes.c_size_t(nbytes),
-                    ctypes.c_int(1),  # hipMemcpyHostToDevice
-                )
-                return
-
-    def sync(self):
-        self._hip.hipDeviceSynchronize()
 
 class _MrLruCache:
     """LRU cache for RIXL memory registrations on ionic NICs.
-    
+
     ionic has ~3GB total MR capacity. Instead of registering/deregistering
     per transfer (Solution A, ~100ms overhead each), cache recently-used
     MRs and evict LRU entries when approaching the limit.
@@ -250,7 +106,9 @@ class _MrLruCache:
         except Exception as e:
             # Registration failed — try evicting more
             logger.warning("MR registration failed (%s), evicting...", e)
-            while self._cache and self._total_bytes + nbytes > self.MAX_REGISTERED_BYTES:
+            while (
+                self._cache and self._total_bytes + nbytes > self.MAX_REGISTERED_BYTES
+            ):
                 self._evict_lru()
             try:
                 descs = self.agent.register_memory([(host_ptr, nbytes, 0, "")], "DRAM")
@@ -272,8 +130,12 @@ class _MrLruCache:
         except Exception:
             pass
         self._total_bytes -= lru_key[1]
-        logger.debug("MR LRU evict: %s (%d bytes, total now %d)", 
-                     hex(lru_key[0]), lru_key[1], self._total_bytes)
+        logger.debug(
+            "MR LRU evict: %s (%d bytes, total now %d)",
+            hex(lru_key[0]),
+            lru_key[1],
+            self._total_bytes,
+        )
 
     def clear(self):
         """Deregister all cached MRs."""
@@ -303,13 +165,26 @@ def patch_nixl_for_rocm():
         return
 
     try:
-        from sglang.srt.disaggregation.nixl.conn import (
-            NixlKVManager,
-            NixlKVReceiver,
-        )
+        from sglang.srt.disaggregation.nixl.conn import NixlKVManager, NixlKVReceiver
     except ImportError:
         logger.warning("sglang nixl connector not available, skipping ROCm patch")
         return
+
+    _required_attrs = [
+        (NixlKVManager, "__init__"),
+        (NixlKVManager, "register_buffer_to_engine"),
+        (NixlKVReceiver, "init"),
+        (NixlKVReceiver, "poll"),
+    ]
+    for cls, attr in _required_attrs:
+        if not hasattr(cls, attr):
+            logger.error(
+                "ROCm DRAM staging patch ABORTED: %s.%s not found. "
+                "SGLang API may have changed — update the monkey-patch.",
+                cls.__name__,
+                attr,
+            )
+            return
 
     logger.info("Applying ROCm DRAM staging monkey-patch to NixlKVManager")
 
@@ -337,11 +212,12 @@ def patch_nixl_for_rocm():
                 # Lazy staging: allocate small DRAM regions per-transfer,
                 # copy GPU→DRAM, register with RIXL, get xfer descs.
 
-                reg_addrs = []
                 staging_tensors = []  # keep alive until transfer completes
 
                 if isinstance(reqs, np.ndarray):
-                    items = [(int(reqs[i, 0]), int(reqs[i, 1])) for i in range(len(reqs))]
+                    items = [
+                        (int(reqs[i, 0]), int(reqs[i, 1])) for i in range(len(reqs))
+                    ]
                 else:
                     items = [(int(r[0]), int(r[1])) for r in reqs]
 
@@ -351,16 +227,17 @@ def patch_nixl_for_rocm():
 
                 for gpu_addr, nbytes in items:
                     host_ptr, tensor = staging.get_staging_region(gpu_addr, nbytes)
+                    staging_tensors.append(tensor)
 
                     if mr_cache:
-                        descs = mr_cache.get_or_register(host_ptr, nbytes, tensor)
+                        mr_cache.get_or_register(host_ptr, nbytes, tensor)
                     else:
-                        # Fallback: direct register (no cache)
                         try:
-                            descs = self.agent.register_memory([(host_ptr, nbytes, 0, "")], "DRAM")
+                            self.agent.register_memory(
+                                [(host_ptr, nbytes, 0, "")], "DRAM"
+                            )
                         except Exception as e:
                             logger.warning("MR registration failed: %s", e)
-                            descs = None
 
                     all_xfer_tuples.append((host_ptr, nbytes, 0))
 
@@ -381,7 +258,7 @@ def patch_nixl_for_rocm():
     def _patched_register(self):
         staging: _RocmDramStaging = self._rocm_staging
         MAX_CHUNK = 512 * 1024 * 1024  # 512MB per MR chunk (ionic safe limit)
-        is_decode = (self.disaggregation_mode.value == "decode")
+        is_decode = self.disaggregation_mode.value == "decode"
 
         if is_decode:
             # DECODE side: pre-allocate DRAM + register in chunks.
@@ -398,7 +275,11 @@ def patch_nixl_for_rocm():
                     kv_addrs.append((host_ptr + offset, chunk, 0, ""))
                     offset += chunk
             self.kv_descs = self.agent.register_memory(kv_addrs, "DRAM")
-            logger.info("ROCm staging DECODE: registered %d chunks (%d buffers)", len(kv_addrs), len(self.kv_args.kv_data_ptrs))
+            logger.info(
+                "ROCm staging DECODE: registered %d chunks (%d buffers)",
+                len(kv_addrs),
+                len(self.kv_args.kv_data_ptrs),
+            )
             if not self.kv_descs:
                 raise Exception("NIXL DRAM registration failed for KV tensors (decode)")
         else:
@@ -408,14 +289,15 @@ def patch_nixl_for_rocm():
                 self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
             ):
                 staging.create(gpu_ptr, data_len, allocate=False)
-            logger.info("ROCm staging PREFILL: %d lazy buffers (no pre-alloc)", len(self.kv_args.kv_data_ptrs))
+            logger.info(
+                "ROCm staging PREFILL: %d lazy buffers (no pre-alloc)",
+                len(self.kv_args.kv_data_ptrs),
+            )
             self.kv_descs = True  # placeholder
 
         # Aux buffers are small — always register
         aux_addrs = []
-        for ptr, length in zip(
-            self.kv_args.aux_data_ptrs, self.kv_args.aux_data_lens
-        ):
+        for ptr, length in zip(self.kv_args.aux_data_ptrs, self.kv_args.aux_data_lens):
             aux_addrs.append((ptr, length, 0, ""))
         self.aux_descs = self.agent.register_memory(aux_addrs, "DRAM")
         if not self.aux_descs:
@@ -447,9 +329,7 @@ def patch_nixl_for_rocm():
     NixlKVManager.register_buffer_to_engine = _patched_register
 
     # ---- 3. _staging_post_copy_h2d (new helper) ----------------------------
-    def _staging_post_copy_h2d(
-        self, kv_indices: npt.NDArray[np.int32]
-    ):
+    def _staging_post_copy_h2d(self, kv_indices: npt.NDArray[np.int32]):
         """Copy received tokens from DRAM staging → GPU after RDMA receive."""
         staging: _RocmDramStaging = self._rocm_staging
         for buf_idx, (gpu_ptr, data_len) in enumerate(

@@ -43,11 +43,18 @@ class GpuInfo:
 def detect_gpu_backend() -> str:
     """Detect available GPU backend: ``'amd'``, ``'nvidia'``, or ``'none'``.
 
-    Checks for AMD first (``amd-smi`` or ROCm path), then NVIDIA
+    Override auto-detection by setting ``DYNAMO_GPU_BACKEND=amd|nvidia|none``.
+    Otherwise checks for AMD first (``amd-smi`` or ROCm path), then NVIDIA
     (``nvidia-smi``). The result is cached module-wide after the first call.
     """
     global _GPU_BACKEND
     if _GPU_BACKEND is not None:
+        return _GPU_BACKEND
+
+    override = os.environ.get("DYNAMO_GPU_BACKEND", "").strip().lower()
+    if override in ("amd", "nvidia", "none"):
+        _GPU_BACKEND = override
+        logger.info("GPU backend override via DYNAMO_GPU_BACKEND=%s", override)
         return _GPU_BACKEND
 
     if shutil.which("amd-smi") or os.path.exists("/opt/rocm/bin/amd-smi"):
@@ -78,14 +85,26 @@ def _check_nvml() -> bool:
     return _nvml_available
 
 
+_nvml_initialized = False
+
+
+def _nvml_ensure_init():
+    global _nvml_initialized
+    if not _nvml_initialized:
+        import pynvml
+
+        pynvml.nvmlInit()
+        _nvml_initialized = True
+        import atexit
+
+        atexit.register(pynvml.nvmlShutdown)
+
+
 def _nvidia_get_count_nvml() -> int:
     import pynvml
 
-    pynvml.nvmlInit()
-    try:
-        return pynvml.nvmlDeviceGetCount()
-    finally:
-        pynvml.nvmlShutdown()
+    _nvml_ensure_init()
+    return pynvml.nvmlDeviceGetCount()
 
 
 def _nvidia_get_count_cli() -> int:
@@ -106,7 +125,7 @@ def _nvidia_get_count_cli() -> int:
 def _nvidia_get_info_nvml(device_index: int) -> Optional[GpuInfo]:
     import pynvml
 
-    pynvml.nvmlInit()
+    _nvml_ensure_init()
     try:
         handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
         name = pynvml.nvmlDeviceGetName(handle)
@@ -145,8 +164,6 @@ def _nvidia_get_info_nvml(device_index: int) -> Optional[GpuInfo]:
     except pynvml.NVMLError as exc:
         logger.warning("NVML query failed for device %d: %s", device_index, exc)
         return None
-    finally:
-        pynvml.nvmlShutdown()
 
 
 def _nvidia_get_info_cli(device_index: int) -> Optional[GpuInfo]:
@@ -229,15 +246,27 @@ def _amd_smi_path() -> str:
     return "amd-smi"
 
 
+_amdsmi_initialized = False
+
+
+def _amdsmi_ensure_init():
+    global _amdsmi_initialized
+    if not _amdsmi_initialized:
+        import amdsmi
+
+        amdsmi.amdsmi_init()
+        _amdsmi_initialized = True
+        import atexit
+
+        atexit.register(amdsmi.amdsmi_shut_down)
+
+
 def _amd_get_count_amdsmi() -> int:
     import amdsmi
 
-    amdsmi.amdsmi_init()
-    try:
-        handles = amdsmi.amdsmi_get_processor_handles()
-        return len(handles)
-    finally:
-        amdsmi.amdsmi_shut_down()
+    _amdsmi_ensure_init()
+    handles = amdsmi.amdsmi_get_processor_handles()
+    return len(handles)
 
 
 def _amd_get_count_cli() -> int:
@@ -263,7 +292,7 @@ def _amd_get_count_cli() -> int:
 def _amd_get_info_amdsmi(device_index: int) -> Optional[GpuInfo]:
     import amdsmi
 
-    amdsmi.amdsmi_init()
+    _amdsmi_ensure_init()
     try:
         handles = amdsmi.amdsmi_get_processor_handles()
         if device_index >= len(handles):
@@ -273,7 +302,11 @@ def _amd_get_info_amdsmi(device_index: int) -> Optional[GpuInfo]:
         name = "AMD GPU"
         try:
             asic_info = amdsmi.amdsmi_get_gpu_asic_info(handle)
-            name = asic_info.get("market_name", name) if isinstance(asic_info, dict) else name
+            name = (
+                asic_info.get("market_name", name)
+                if isinstance(asic_info, dict)
+                else name
+            )
         except Exception:
             pass
 
@@ -285,12 +318,16 @@ def _amd_get_info_amdsmi(device_index: int) -> Optional[GpuInfo]:
 
         mem_total = mem_used = mem_free = 0
         try:
-            vram_info = amdsmi.amdsmi_get_gpu_memory_total(handle, amdsmi.AmdSmiMemoryType.VRAM)
+            vram_info = amdsmi.amdsmi_get_gpu_memory_total(
+                handle, amdsmi.AmdSmiMemoryType.VRAM
+            )
             mem_total = int(vram_info) // (1024 * 1024) if vram_info else 0
         except Exception:
             pass
         try:
-            vram_used = amdsmi.amdsmi_get_gpu_memory_usage(handle, amdsmi.AmdSmiMemoryType.VRAM)
+            vram_used = amdsmi.amdsmi_get_gpu_memory_usage(
+                handle, amdsmi.AmdSmiMemoryType.VRAM
+            )
             mem_used = int(vram_used) // (1024 * 1024) if vram_used else 0
         except Exception:
             pass
@@ -362,8 +399,6 @@ def _amd_get_info_amdsmi(device_index: int) -> Optional[GpuInfo]:
     except Exception as exc:
         logger.warning("amdsmi query failed for device %d: %s", device_index, exc)
         return None
-    finally:
-        amdsmi.amdsmi_shut_down()
 
 
 def _parse_amd_smi_value(val: str) -> float:
@@ -394,7 +429,11 @@ def _amd_get_info_cli(device_index: int) -> Optional[GpuInfo]:
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout)
-            gpus = data if isinstance(data, list) else data.get("gpus", data.get("devices", []))
+            gpus = (
+                data
+                if isinstance(data, list)
+                else data.get("gpus", data.get("devices", []))
+            )
             if isinstance(gpus, list) and device_index < len(gpus):
                 gpu = gpus[device_index]
                 if isinstance(gpu, dict):
@@ -409,7 +448,12 @@ def _amd_get_info_cli(device_index: int) -> Optional[GpuInfo]:
                     driver = gpu.get("driver_version", driver)
                     if isinstance(asic, dict):
                         driver = asic.get("driver_version", driver)
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+        KeyError,
+    ):
         pass
 
     try:
@@ -421,15 +465,32 @@ def _amd_get_info_cli(device_index: int) -> Optional[GpuInfo]:
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout)
-            gpus = data if isinstance(data, list) else data.get("gpus", data.get("devices", []))
+            gpus = (
+                data
+                if isinstance(data, list)
+                else data.get("gpus", data.get("devices", []))
+            )
             if isinstance(gpus, list) and device_index < len(gpus):
                 gpu = gpus[device_index]
                 if isinstance(gpu, dict):
-                    power = _parse_amd_smi_value(str(gpu.get("power", gpu.get("power_usage", 0))))
-                    temp = _parse_amd_smi_value(str(gpu.get("temperature", gpu.get("temperature_edge", 0))))
-                    util_gpu = _parse_amd_smi_value(str(gpu.get("gfx_util", gpu.get("gpu_use", 0))))
-                    util_mem = _parse_amd_smi_value(str(gpu.get("mem_util", gpu.get("mem_use", 0))))
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+                    power = _parse_amd_smi_value(
+                        str(gpu.get("power", gpu.get("power_usage", 0)))
+                    )
+                    temp = _parse_amd_smi_value(
+                        str(gpu.get("temperature", gpu.get("temperature_edge", 0)))
+                    )
+                    util_gpu = _parse_amd_smi_value(
+                        str(gpu.get("gfx_util", gpu.get("gpu_use", 0)))
+                    )
+                    util_mem = _parse_amd_smi_value(
+                        str(gpu.get("mem_util", gpu.get("mem_use", 0)))
+                    )
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+        KeyError,
+    ):
         pass
 
     try:
@@ -441,16 +502,29 @@ def _amd_get_info_cli(device_index: int) -> Optional[GpuInfo]:
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout)
-            gpus = data if isinstance(data, list) else data.get("gpus", data.get("devices", []))
+            gpus = (
+                data
+                if isinstance(data, list)
+                else data.get("gpus", data.get("devices", []))
+            )
             if isinstance(gpus, list) and device_index < len(gpus):
                 gpu = gpus[device_index]
                 if isinstance(gpu, dict):
                     vram = gpu.get("vram", gpu)
                     if isinstance(vram, dict):
-                        mem_total = int(_parse_amd_smi_value(str(vram.get("total", vram.get("size", 0)))))
+                        mem_total = int(
+                            _parse_amd_smi_value(
+                                str(vram.get("total", vram.get("size", 0)))
+                            )
+                        )
                         mem_used = int(_parse_amd_smi_value(str(vram.get("used", 0))))
                         mem_free = max(0, mem_total - mem_used)
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+        KeyError,
+    ):
         pass
 
     if not name or name == "AMD GPU":

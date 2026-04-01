@@ -1,0 +1,131 @@
+# Dynamo ROCm + vLLM — all-in-one image for AMD MI300X/MI355X
+#
+# Includes: Dynamo, vLLM (ROCm), RIXL/nixl, UCX-ROCm,
+#           etcd, NATS, DRAM staging patches
+#
+# Build (~20 min):
+#   docker build -f container/Dockerfile.rocm-vllm -t dynamo-rocm-vllm:latest .
+#
+# Run:
+#   docker run --network=host --privileged \
+#       --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
+#       --group-add video --shm-size 256G --ipc=host \
+#       dynamo-rocm-vllm:latest bash
+
+FROM rocm/vllm:rocm6.3_mi300_ubuntu22.04_vllm_0.8.3
+
+LABEL maintainer="AMD Dynamo Team" \
+      description="Dynamo + vLLM on AMD ROCm (MI300X/MI355X)" \
+      version="1.0"
+
+ARG ETCD_VERSION=v3.5.21
+ARG NATS_VERSION=v2.10.28
+ARG UCX_BRANCH=v1.19.x
+
+# System deps for building
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+        build-essential autoconf automake libtool pkg-config \
+        libclang-dev wget git meson ninja-build \
+        libnuma-dev libibverbs-dev librdmacm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# UCX with ROCm support
+RUN cd /tmp && \
+    git clone https://github.com/ROCm/ucx -b ${UCX_BRANCH} --depth 1 && \
+    cd ucx && ./autogen.sh && mkdir -p build && cd build && \
+    ../configure --enable-shared --disable-static --disable-doxygen-doc \
+        --enable-optimizations --enable-devel-headers \
+        --with-rocm=/opt/rocm --with-verbs --with-dm --enable-mt \
+        --prefix=/usr/local/ucx --quiet && \
+    make -j$(nproc) --quiet && make install --quiet && \
+    rm -rf /tmp/ucx
+
+# RIXL
+RUN pip install --quiet meson ninja
+COPY RIXL /tmp/rixl-src
+RUN cd /tmp/rixl-src && mkdir -p /tmp/rixl-build && cd /tmp/rixl-build && \
+    PKG_CONFIG_PATH=/usr/local/ucx/lib/pkgconfig \
+    meson setup /tmp/rixl-src --prefix=/opt/rocm/rixl \
+        -Ducx_path=/usr/local/ucx \
+        -Drocm_path=/opt/rocm \
+        -Duse_rocm=true \
+        -Ddisable_gds_backend=true \
+        -Ddisable_mooncake_backend=true --quiet && \
+    ninja -j$(nproc) --quiet && ninja install --quiet && \
+    rm -rf /tmp/rixl-src /tmp/rixl-build
+
+# nixl -> rixl Python shim
+RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    mkdir -p $SITE/nixl && \
+    echo "from rixl import *" > $SITE/nixl/__init__.py && \
+    echo "from rixl._api import *" > $SITE/nixl/_api.py && \
+    echo "from rixl._bindings import *" > $SITE/nixl/_bindings.py
+
+ENV LD_LIBRARY_PATH="/opt/rocm/rixl/lib/x86_64-linux-gnu:/usr/local/ucx/lib:${LD_LIBRARY_PATH}"
+ENV PYTHONPATH="/opt/rocm/rixl/lib/python3/dist-packages:${PYTHONPATH}"
+ENV NIXL_PREFIX=/opt/rocm/rixl
+
+# Rust toolchain for maturin build
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN pip install --quiet maturin
+
+# Build Dynamo with kv-indexer support
+COPY dynamo /opt/dynamo
+WORKDIR /opt/dynamo
+RUN export LIBCLANG_PATH=/opt/rocm/lib/llvm/lib && \
+    export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h | head -1 | xargs dirname)" && \
+    cd lib/bindings/python && \
+    NIXL_PREFIX=/opt/rocm/rixl maturin build --release \
+        --features "kv-indexer,kv-indexer-runtime" \
+        --out /tmp/dist && \
+    pip install /tmp/dist/ai_dynamo_runtime*.whl && \
+    rm -rf /tmp/dist && \
+    cd /opt/dynamo && pip install -e .
+
+# Auto-patch DRAM staging
+RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    echo "import dynamo.sglang.nixl_rocm_staging" > $SITE/dynamo_rocm_autofix.pth && \
+    echo "import dynamo.sglang.mooncake_rocm_staging" >> $SITE/dynamo_rocm_autofix.pth
+
+# Test/runtime dependencies
+RUN pip install --quiet \
+    pytest pytest-benchmark pytest-httpserver pytest-asyncio \
+    pytest-timeout nats-py boto3 kubernetes_asyncio \
+    prometheus_api_client kr8s
+
+# etcd
+RUN wget -q https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
+    mkdir -p /usr/local/bin/etcd-dir && \
+    tar -xf /tmp/etcd.tar.gz -C /usr/local/bin/etcd-dir --strip-components=1 && \
+    ln -sf /usr/local/bin/etcd-dir/etcd /usr/local/bin/etcd && \
+    ln -sf /usr/local/bin/etcd-dir/etcdctl /usr/local/bin/etcdctl && \
+    rm /tmp/etcd.tar.gz
+
+# NATS
+RUN wget -q https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-amd64.deb -O /tmp/nats.deb && \
+    dpkg -i /tmp/nats.deb && rm /tmp/nats.deb
+
+# Ionic ABI auto-fix
+RUN printf '#!/bin/bash\n\
+HOST_LIB=$(find /usr/lib/x86_64-linux-gnu -name "libionic.so.1.1.*" 2>/dev/null | sort -V | tail -1)\n\
+CONTAINER_LIB=$(readlink -f /usr/lib/x86_64-linux-gnu/libionic.so.1 2>/dev/null)\n\
+if [ -n "$HOST_LIB" ] && [ "$HOST_LIB" != "$CONTAINER_LIB" ]; then\n\
+    ln -sf "$(basename $HOST_LIB)" /usr/lib/x86_64-linux-gnu/libionic.so.1\n\
+    ldconfig\n\
+    echo "[ionic-abi] Fixed: $(basename $HOST_LIB)"\n\
+fi\n' > /usr/local/bin/fix-ionic-abi.sh && chmod +x /usr/local/bin/fix-ionic-abi.sh
+
+# Verify
+RUN python3 -c "from dynamo.llm import ModelType, MockEngineArgs; print('dynamo.llm OK')" && \
+    python3 -c "import vllm; print(f'vLLM {vllm.__version__} OK')" && \
+    python3 -c "from nixl._api import nixl_agent; print('nixl/rixl OK')" && \
+    python3 -c "from dynamo.indexer import main; print('kv-indexer OK')" && \
+    etcd --version | head -1 && \
+    nats-server --version
+
+ENV RCCL_MSCCL_ENABLE=0
+WORKDIR /opt/dynamo
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python3 -c "from dynamo.llm import ModelType; print('ok')" || exit 1

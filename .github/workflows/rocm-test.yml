@@ -1,6 +1,8 @@
 name: ROCm Test Pipeline
 
 on:
+  schedule:
+    - cron: '0 6 * * *'  # Nightly at 6am UTC
   pull_request:
     paths:
       - 'lib/kvbm-kernels/hip/**'
@@ -41,9 +43,9 @@ jobs:
 
       - name: Install dynamo (editable, no Rust bindings)
         run: |
-          pip install -e ".[dev]" --no-build-isolation 2>/dev/null || \
-          pip install -e . 2>/dev/null || \
-          echo "Dynamo install skipped — running with importable tests only"
+          pip install -e ".[dev]" --no-build-isolation 2>&1 | tail -5 || \
+          pip install -e . 2>&1 | tail -5
+        continue-on-error: true
 
       - name: ROCm build checks
         run: |
@@ -56,7 +58,7 @@ jobs:
           echo "PASS: Memory crate has rocm feature"
 
           # Verify Dockerfile ROCm blocks
-          grep -q 'rocm' container/templates/vllm_runtime.Dockerfile || true
+          grep -q 'rocm' container/templates/vllm_runtime.Dockerfile
           echo "PASS: Dockerfile check complete"
 
       - name: Run Planner unit tests
@@ -65,8 +67,9 @@ jobs:
                  tests/planner/unit/test_load_predictors.py \
                  tests/planner/unit/test_remote_planner.py \
                  tests/mocker/test_config.py \
-                 -m "rocm and unit" -v --tb=short \
-                 -k "not (vllm or trtllm)" 2>&1 || true
+                 --override-ini=filterwarnings=default \
+                 -v --tb=short \
+                 -k "not (vllm or trtllm)"
 
   # --------------------------------------------------------------------------
   # Tier 2: Post-merge nightly — GPU tests on MI355X (~30 min)
@@ -85,7 +88,8 @@ jobs:
         --group-add video
         --shm-size 256G
         --ipc=host
-        --privileged
+        --cap-add=SYS_PTRACE
+        --security-opt seccomp=unconfined
     env:
       SGLANG_AITER_MLA_PERSIST: "False"
       SGLANG_USE_AITER: "1"
@@ -95,6 +99,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Rust toolchain and cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/bin
+            /root/.cargo/registry
+            /root/.rustup
+            target/
+          key: rocm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: rocm-cargo-
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: /root/.cache/pip
+          key: rocm-pip-${{ hashFiles('**/requirements*.txt', '**/constraints*.txt') }}
+          restore-keys: rocm-pip-
+
       - name: GPU Detection
         run: |
           rocm-smi --showproductname | head -10
@@ -103,7 +125,9 @@ jobs:
       - name: Build Dynamo
         run: |
           apt-get update -qq && apt-get install -y -qq build-essential pkg-config libclang-dev protobuf-compiler > /dev/null 2>&1
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1 -q 2>&1 | tail -1
+          if ! command -v rustup &>/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1 -q 2>&1 | tail -1
+          fi
           export PATH=/root/.cargo/bin:$PATH LIBCLANG_PATH=/opt/rocm/lib/llvm/lib
           cd lib/bindings/python && maturin develop --release 2>&1 | tail -3
           cd ../../.. && pip install -e . 2>&1 | tail -2
@@ -148,6 +172,16 @@ jobs:
         run: |
           pytest tests/planner/test_fpm_relay_sglang.py -v --tb=short
 
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rocm-tier2-results-${{ github.sha }}
+          path: |
+            .pytest_cache/
+            test_results*.log
+          retention-days: 30
+
   # --------------------------------------------------------------------------
   # Tier 3: Weekly — multi-node disagg tests (~2 hr)
   # --------------------------------------------------------------------------
@@ -164,5 +198,74 @@ jobs:
 
       - name: MoRI RDMA Disagg Tests
         run: |
-          pytest tests/disagg/test_mori_rdma.py -v --tb=short || \
-            echo "Multi-node tests skipped (DISAGG_PREFILL_HOST not set)"
+          if [ -n "$DISAGG_PREFILL_HOST" ]; then
+            pytest tests/disagg/test_mori_rdma.py -v --tb=short
+          else
+            echo "DISAGG_PREFILL_HOST not set — skipping multi-node tests"
+          fi
+
+  # --------------------------------------------------------------------------
+  # Nightly: Full suite on MI355X (~30 min)
+  # --------------------------------------------------------------------------
+  nightly-full-suite:
+    name: "Nightly: Full ROCm Test Suite"
+    runs-on: [self-hosted, rocm, mi355x]
+    if: github.event_name == 'schedule'
+    timeout-minutes: 60
+    container:
+      image: rocm/sgl-dev:sglang-0.5.9-rocm720-mi35x-mori-0227-2
+      options: >-
+        --device=/dev/kfd
+        --device=/dev/dri
+        --device=/dev/infiniband
+        --group-add video
+        --shm-size 256G
+        --ipc=host
+        --cap-add=SYS_PTRACE
+        --security-opt seccomp=unconfined
+    env:
+      SGLANG_AITER_MLA_PERSIST: "False"
+      RCCL_MSCCL_ENABLE: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Dynamo (with kv-indexer)
+        run: |
+          apt-get update -qq && apt-get install -y -qq build-essential pkg-config libclang-dev protobuf-compiler --quiet
+          if ! command -v rustup &>/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1 -q 2>&1 | tail -1
+          fi
+          export PATH=/root/.cargo/bin:$PATH LIBCLANG_PATH=/opt/rocm/lib/llvm/lib
+          cd lib/bindings/python
+          NIXL_PREFIX=/opt/rocm/rixl maturin build --release --features "kv-indexer,kv-indexer-runtime" --out /tmp/dist 2>&1 | tail -3
+          pip install /tmp/dist/ai_dynamo_runtime*.whl 2>&1 | tail -2
+          cd ../../.. && pip install -e . 2>&1 | tail -2
+          pip install -q -c container/constraints-rocm.txt pytest pytest-benchmark pytest-httpserver pytest-asyncio pytest-timeout nats-py
+
+      - name: Full test suite
+        run: |
+          python3 -m pytest \
+            tests/basic/ \
+            tests/disagg/ \
+            tests/router/ \
+            tests/frontend/ \
+            tests/mocker/ \
+            tests/planner/unit/ \
+            tests/planner/test_fpm_relay_sglang.py \
+            tests/planner/test_replica_calculation.py \
+            tests/planner/test_load_generator.py \
+            tests/global_planner/unit/ \
+            tests/serve/test_prometheus_exposition_format_injection.py \
+            tests/test_predownload_models.py \
+            --override-ini=filterwarnings=default \
+            -v --tb=short --timeout=300 \
+            --junitxml=test-results-nightly.xml
+
+      - name: Upload nightly results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rocm-nightly-${{ github.run_number }}
+          path: test-results-nightly.xml
+          retention-days: 90

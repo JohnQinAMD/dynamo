@@ -28,14 +28,24 @@ use std::sync::Mutex;
 // Raw FFI declarations for HIP memory pool APIs
 // ---------------------------------------------------------------------------
 
+/// Partial mirror of `hipMemPoolProps`.
+///
+/// Layout from hip_runtime_api.h:
+///   hipMemAllocationType    allocType;        // offset 0  (i32)
+///   hipMemAllocationHandleType handleTypes;   // offset 4  (i32)
+///   hipMemLocation          location;         // offset 8  { type: i32, id: i32 }
+///   unsigned char            reserved[64];    // offset 16
+///
+/// Total size: 80 bytes. We add extra padding to be safe against future changes.
 #[repr(C)]
 #[allow(non_camel_case_types)]
 struct hipMemPoolProps {
     alloc_type: i32,
-    _padding_alloc: [u8; 4],
+    handle_types: i32,
     location_type: i32,
     location_id: i32,
-    _reserved: [u8; 128],
+    _reserved: [u8; 64],
+    _extra_padding: [u8; 128],
 }
 
 #[link(name = "amdhip64")]

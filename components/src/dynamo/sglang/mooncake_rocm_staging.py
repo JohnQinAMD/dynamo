@@ -32,7 +32,6 @@ Data flow with patch active:
 
 from __future__ import annotations
 
-import ctypes
 import logging
 import os
 import struct
@@ -62,87 +61,11 @@ _PATCHED = False  # guard against double-patch
 
 
 # ---------------------------------------------------------------------------
-# DRAM staging pool  (reused from nixl_rocm_staging design)
+# DRAM staging pool — shared implementation (after _IS_ROCM detection)
 # ---------------------------------------------------------------------------
-class _RocmDramStaging:
-    """Pinned host mirrors for GPU VRAM buffers.
-
-    Each GPU buffer gets a same-sized pinned host allocation.  Addresses
-    are translated 1:1 (gpu_base+offset → host_base+offset) so all
-    existing index arithmetic in the connector is preserved.
-    """
-
-    def __init__(self):
-        try:
-            self._hip = ctypes.CDLL("libamdhip64.so")
-        except OSError:
-            raise RuntimeError(
-                "libamdhip64.so not found — ROCm DRAM staging requires the HIP runtime"
-            )
-        # gpu_base → (pinned_tensor, host_ptr, size)
-        self.buffers: dict[int, tuple] = {}
-
-    def create(self, gpu_ptr: int, size: int) -> int:
-        """Allocate a pinned host buffer mirroring *gpu_ptr*.  Returns host ptr."""
-        import torch
-
-        t = torch.empty(size, dtype=torch.uint8, device="cpu").pin_memory()
-        host_ptr = t.data_ptr()
-        self.buffers[gpu_ptr] = (t, host_ptr, size)
-        logger.info(
-            "ROCm DRAM staging: %d MB  GPU %s → host %s",
-            size // (1024 * 1024),
-            hex(gpu_ptr),
-            hex(host_ptr),
-        )
-        return host_ptr
-
-    # -- address translation --------------------------------------------------
-
-    def translate_addr(self, addr: int) -> int:
-        """Translate a single GPU address to its DRAM staging counterpart."""
-        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-            if gpu_base <= addr < gpu_base + buf_size:
-                return addr - gpu_base + host_base
-        return addr
-
-    def translate_addrs(self, addrs: list) -> list:
-        return [self.translate_addr(a) for a in addrs]
-
-    def translate_ptrs(self, ptrs: list) -> list:
-        """Translate base pointers (exact-match on gpu_base)."""
-        return [self.buffers[p][1] if p in self.buffers else p for p in ptrs]
-
-    # -- GPU ↔ DRAM copies ----------------------------------------------------
-
-    def copy_d2h(self, gpu_addr: int, nbytes: int):
-        """hipMemcpy Device→Host.  Silently skips addresses not in any buffer."""
-        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-            if gpu_base <= gpu_addr < gpu_base + buf_size:
-                offset = gpu_addr - gpu_base
-                self._hip.hipMemcpy(
-                    ctypes.c_void_p(host_base + offset),
-                    ctypes.c_void_p(gpu_addr),
-                    ctypes.c_size_t(nbytes),
-                    ctypes.c_int(2),  # hipMemcpyDeviceToHost
-                )
-                return
-
-    def copy_h2d(self, gpu_addr: int, nbytes: int):
-        """hipMemcpy Host→Device.  Silently skips addresses not in any buffer."""
-        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
-            if gpu_base <= gpu_addr < gpu_base + buf_size:
-                offset = gpu_addr - gpu_base
-                self._hip.hipMemcpy(
-                    ctypes.c_void_p(gpu_addr),
-                    ctypes.c_void_p(host_base + offset),
-                    ctypes.c_size_t(nbytes),
-                    ctypes.c_int(1),  # hipMemcpyHostToDevice
-                )
-                return
-
-    def sync(self):
-        self._hip.hipDeviceSynchronize()
+from dynamo.sglang.rocm_dram_staging_common import (  # noqa: E402
+    RocmDramStaging as _RocmDramStaging,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +95,11 @@ class _StagingEngineWrapper:
     ) -> int:
         staging = self._staging
         for src, length in zip(buffers, lengths):
-            staging.copy_d2h(src, length)
+            if not staging.copy_d2h(src, length):
+                raise RuntimeError(
+                    f"DRAM staging: GPU addr {hex(src)} not registered — "
+                    "RDMA from GPU memory would fail on ionic NICs"
+                )
         staging.sync()
         translated_src = staging.translate_addrs(buffers)
         return self._real.batch_transfer_sync(
@@ -183,7 +110,11 @@ class _StagingEngineWrapper:
         self, session_id: str, buffer: int, peer_buffer_address: int, length: int
     ) -> int:
         staging = self._staging
-        staging.copy_d2h(buffer, length)
+        if not staging.copy_d2h(buffer, length):
+            raise RuntimeError(
+                f"DRAM staging: GPU addr {hex(buffer)} not registered — "
+                "RDMA from GPU memory would fail on ionic NICs"
+            )
         staging.sync()
         translated = staging.translate_addr(buffer)
         return self._real.transfer_sync(
@@ -215,6 +146,23 @@ def patch_mooncake_for_rocm():
     except ImportError:
         logger.warning("sglang mooncake connector not available, skipping ROCm patch")
         return
+
+    _required_attrs = [
+        (MooncakeKVManager, "__init__"),
+        (MooncakeKVManager, "register_buffer_to_engine"),
+        (MooncakeKVReceiver, "_register_kv_args"),
+        (MooncakeKVReceiver, "init"),
+        (MooncakeKVReceiver, "poll"),
+    ]
+    for cls, attr in _required_attrs:
+        if not hasattr(cls, attr):
+            logger.error(
+                "ROCm DRAM staging patch ABORTED: %s.%s not found. "
+                "SGLang API may have changed — update the monkey-patch.",
+                cls.__name__,
+                attr,
+            )
+            return
 
     logger.info("Applying ROCm DRAM staging monkey-patch to MooncakeKVManager")
 
@@ -326,9 +274,7 @@ def patch_mooncake_for_rocm():
         for bootstrap_info in self.bootstrap_infos:
             # Translate KV ptrs: GPU → DRAM staging
             kv_ptrs = staging.translate_ptrs(self.kv_mgr.kv_args.kv_data_ptrs)
-            packed_kv_data_ptrs = b"".join(
-                struct.pack("Q", ptr) for ptr in kv_ptrs
-            )
+            packed_kv_data_ptrs = b"".join(struct.pack("Q", ptr) for ptr in kv_ptrs)
             packed_aux_data_ptrs = b"".join(
                 struct.pack("Q", ptr) for ptr in self.kv_mgr.kv_args.aux_data_ptrs
             )

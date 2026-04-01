@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Disaggregated SGLang deployment on AMD MI355X GPUs with MoRI RDMA.
+# NOTE: apiVersion nvidia.com/v1alpha1 is the Dynamo CRD API group — it is
+# vendor-neutral and works on AMD clusters with the Dynamo Operator installed.
 
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
@@ -46,26 +48,23 @@ spec:
           - dynamo.sglang
           args:
             - --model-path
-            - deepseek-ai/DeepSeek-V3
+            - Qwen/Qwen3-0.6B
             - --tp-size
-            - "8"
-            - --attention-backend
-            - aiter
-            - --kv-cache-dtype
-            - fp8_e4m3
+            - "1"
             - --page-size
             - "16"
             - --disaggregation-mode
             - prefill
             - --disaggregation-transfer-backend
             - mori
+            - --trust-remote-code
           securityContext:
             privileged: true
           resources:
             requests:
-              amd.com/gpu: "8"
+              amd.com/gpu: "1"
             limits:
-              amd.com/gpu: "8"
+              amd.com/gpu: "1"
     SglangDecodeWorker:
       envFromSecret: hf-token-secret
       componentType: worker
@@ -88,19 +87,16 @@ spec:
           - dynamo.sglang
           args:
             - --model-path
-            - deepseek-ai/DeepSeek-V3
+            - Qwen/Qwen3-0.6B
             - --tp-size
-            - "8"
-            - --attention-backend
-            - aiter
-            - --kv-cache-dtype
-            - fp8_e4m3
+            - "1"
             - --page-size
             - "16"
             - --disaggregation-mode
             - decode
             - --disaggregation-transfer-backend
             - mori
+            - --trust-remote-code
           securityContext:
             privileged: true
           resources:

@@ -26,7 +26,6 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.parallel,
     pytest.mark.pre_merge,
-    pytest.mark.sglang,
 ]
 
 
@@ -66,7 +65,10 @@ def test_rocm_version_consistency():
         pytest.skip("ROCm not installed at /opt/rocm")
 
     signals = [
-        ("rocm_path", "cat /opt/rocm/.info/version 2>/dev/null || cat /opt/rocm/.info/version-utils 2>/dev/null"),
+        (
+            "rocm_path",
+            "cat /opt/rocm/.info/version 2>/dev/null || cat /opt/rocm/.info/version-utils 2>/dev/null",
+        ),
         ("hipcc", "hipcc --version | head -3"),
         ("pip_torch", "python -m pip list --format=freeze 2>/dev/null | grep -i torch"),
         ("pip_rocm", "python -m pip list --format=freeze 2>/dev/null | grep -i rocm"),

@@ -1,0 +1,245 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared DRAM staging primitives for ROCm disaggregated serving.
+
+On AMD GPUs with Pensando ionic NICs, RDMA libraries cannot ``ibv_reg_mr()``
+on GPU VRAM (no GPUDirect RDMA).  This module provides a common
+``RocmDramStaging`` class that both the NIXL and Mooncake monkey-patch
+modules use to bounce KV data through pinned host memory.
+
+Data flow::
+
+    GPU VRAM  ─hipMemcpy D2H─▶  Pinned DRAM  ──RDMA──▶  Remote DRAM  ─hipMemcpy H2D─▶  GPU VRAM
+"""
+
+from __future__ import annotations
+
+import ctypes
+import logging
+import os
+import threading
+
+logger = logging.getLogger(__name__)
+
+_IS_ROCM = False
+try:
+    import torch as _torch
+
+    _IS_ROCM = hasattr(_torch.version, "hip") and _torch.version.hip is not None
+except ImportError:
+    pass
+
+
+def is_rocm_staging_enabled(env_var: str = "SGLANG_ROCM_DRAM_STAGING") -> bool:
+    """Check whether ROCm DRAM staging should be active."""
+    if _IS_ROCM:
+        return True
+    return os.environ.get(env_var, "").lower() in ("1", "true", "yes")
+
+
+class RocmDramStaging:
+    """Thread-safe pinned-host mirrors for GPU VRAM buffers.
+
+    Each GPU buffer gets a same-sized pinned host allocation.  Addresses
+    are translated 1:1 ``(gpu_base + offset → host_base + offset)`` so all
+    existing index arithmetic in the caller is preserved.
+    """
+
+    def __init__(self):
+        try:
+            self._hip = ctypes.CDLL("libamdhip64.so")
+        except OSError:
+            raise RuntimeError(
+                "libamdhip64.so not found — ROCm DRAM staging requires the HIP runtime"
+            )
+        self._lock = threading.Lock()
+        self.buffers: dict[int, tuple] = {}  # gpu_base → (tensor, host_ptr, size)
+
+        self._stream = ctypes.c_void_p(0)
+        err = self._hip.hipStreamCreate(ctypes.byref(self._stream))
+        if err != 0:
+            logger.warning(
+                "hipStreamCreate failed (%d), falling back to device sync", err
+            )
+            self._stream = None
+
+    # -- buffer management -----------------------------------------------------
+
+    def create(self, gpu_ptr: int, size: int, allocate: bool = True) -> int:
+        """Register a GPU buffer for staging.
+
+        Args:
+            gpu_ptr: GPU buffer base address.
+            size: Buffer size in bytes.
+            allocate: If ``True``, allocate pinned DRAM now (decode side).
+                      If ``False``, record metadata only (prefill lazy mode).
+
+        Returns:
+            ``host_ptr`` if allocated, or ``gpu_ptr`` as placeholder if lazy.
+        """
+        with self._lock:
+            if allocate:
+                import torch
+
+                t = torch.empty(size, dtype=torch.uint8, device="cpu").pin_memory()
+                host_ptr = t.data_ptr()
+                self.buffers[gpu_ptr] = (t, host_ptr, size)
+                logger.info(
+                    "DRAM staging: %d MB  GPU %s → host %s",
+                    size // (1024 * 1024),
+                    hex(gpu_ptr),
+                    hex(host_ptr),
+                )
+                return host_ptr
+            else:
+                self.buffers[gpu_ptr] = (None, gpu_ptr, size)
+                logger.info(
+                    "DRAM staging: %d MB GPU %s (lazy)",
+                    size // (1024 * 1024),
+                    hex(gpu_ptr),
+                )
+                return gpu_ptr
+
+    def get_staging_region(self, gpu_addr: int, nbytes: int):
+        """Allocate a transient pinned region and copy GPU data into it.
+
+        Returns ``(host_ptr, tensor)`` — caller must keep *tensor* alive
+        until the RDMA transfer completes.
+        """
+        import torch
+
+        t = torch.empty(nbytes, dtype=torch.uint8, device="cpu").pin_memory()
+        host_ptr = t.data_ptr()
+        self.copy_d2h_direct(gpu_addr, host_ptr, nbytes)
+        self.sync()
+        return host_ptr, t
+
+    # -- HIP helpers -----------------------------------------------------------
+
+    def _check_hip(self, err: int, op: str):
+        if err != 0:
+            raise RuntimeError(f"HIP {op} failed with error code {err}")
+
+    def copy_d2h_direct(self, gpu_addr: int, host_addr: int, nbytes: int):
+        if self._stream is not None:
+            err = self._hip.hipMemcpyAsync(
+                ctypes.c_void_p(host_addr),
+                ctypes.c_void_p(gpu_addr),
+                ctypes.c_size_t(nbytes),
+                ctypes.c_int(2),
+                self._stream,
+            )
+            self._check_hip(err, "hipMemcpyAsync D2H")
+        else:
+            err = self._hip.hipMemcpy(
+                ctypes.c_void_p(host_addr),
+                ctypes.c_void_p(gpu_addr),
+                ctypes.c_size_t(nbytes),
+                ctypes.c_int(2),
+            )
+            self._check_hip(err, "hipMemcpy D2H")
+
+    def copy_h2d_direct(self, host_addr: int, gpu_addr: int, nbytes: int):
+        if self._stream is not None:
+            err = self._hip.hipMemcpyAsync(
+                ctypes.c_void_p(gpu_addr),
+                ctypes.c_void_p(host_addr),
+                ctypes.c_size_t(nbytes),
+                ctypes.c_int(1),
+                self._stream,
+            )
+            self._check_hip(err, "hipMemcpyAsync H2D")
+        else:
+            err = self._hip.hipMemcpy(
+                ctypes.c_void_p(gpu_addr),
+                ctypes.c_void_p(host_addr),
+                ctypes.c_size_t(nbytes),
+                ctypes.c_int(1),
+            )
+            self._check_hip(err, "hipMemcpy H2D")
+
+    # -- buffer-aware copies ---------------------------------------------------
+
+    def copy_d2h(self, gpu_addr: int, nbytes: int) -> bool:
+        """Copy GPU→Host within a registered buffer. Returns False if unregistered."""
+        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
+            if gpu_base <= gpu_addr < gpu_base + buf_size:
+                offset = gpu_addr - gpu_base
+                err = self._hip.hipMemcpy(
+                    ctypes.c_void_p(host_base + offset),
+                    ctypes.c_void_p(gpu_addr),
+                    ctypes.c_size_t(nbytes),
+                    ctypes.c_int(2),
+                )
+                self._check_hip(err, "hipMemcpy D2H")
+                return True
+        return False
+
+    def copy_h2d(self, gpu_addr: int, nbytes: int) -> bool:
+        """Copy Host→GPU within a registered buffer. Returns False if unregistered."""
+        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
+            if gpu_base <= gpu_addr < gpu_base + buf_size:
+                offset = gpu_addr - gpu_base
+                err = self._hip.hipMemcpy(
+                    ctypes.c_void_p(gpu_addr),
+                    ctypes.c_void_p(host_base + offset),
+                    ctypes.c_size_t(nbytes),
+                    ctypes.c_int(1),
+                )
+                self._check_hip(err, "hipMemcpy H2D")
+                return True
+        return False
+
+    def sync(self):
+        if self._stream is not None:
+            err = self._hip.hipStreamSynchronize(self._stream)
+            self._check_hip(err, "hipStreamSynchronize")
+        else:
+            err = self._hip.hipDeviceSynchronize()
+            self._check_hip(err, "hipDeviceSynchronize")
+
+    # -- address translation ---------------------------------------------------
+
+    def translate_base(self, gpu_ptr: int) -> int:
+        e = self.buffers.get(gpu_ptr)
+        return e[1] if e else gpu_ptr
+
+    def translate_ptrs(self, ptrs: list) -> list:
+        return [self.translate_base(p) for p in ptrs]
+
+    def translate_addr(self, addr: int) -> int:
+        for gpu_base, (_, host_base, buf_size) in self.buffers.items():
+            if gpu_base <= addr < gpu_base + buf_size:
+                return addr - gpu_base + host_base
+        return addr
+
+    def translate_addrs(self, addrs: list) -> list:
+        return [self.translate_addr(a) for a in addrs]
+
+    def translate_reqs(self, reqs):
+        """Translate GPU addrs in an (N,3) array or list of tuples."""
+        import numpy as np
+
+        if isinstance(reqs, np.ndarray):
+            if reqs.size == 0:
+                return reqs
+            result = reqs.copy()
+            for gpu_base, (_, host_base, buf_size) in self.buffers.items():
+                mask = (result[:, 0] >= gpu_base) & (result[:, 0] < gpu_base + buf_size)
+                result[mask, 0] = result[mask, 0] - gpu_base + host_base
+                result[mask, 2] = 0
+            return result
+
+        out = []
+        for item in reqs:
+            addr, length, dev = item[0], item[1], item[2]
+            for gpu_base, (_, host_base, buf_size) in self.buffers.items():
+                if gpu_base <= addr < gpu_base + buf_size:
+                    addr = addr - gpu_base + host_base
+                    dev = 0
+                    break
+            out.append(
+                (addr, length, dev) if len(item) == 3 else (addr, length, dev, item[3])
+            )
+        return out

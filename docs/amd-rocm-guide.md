@@ -155,7 +155,7 @@ pip install pytest pytest-benchmark pytest-httpserver pytest-asyncio \
     prophet boto3 kubernetes_asyncio
 ```
 
-**Verified**: 190+ tests pass, 42 skipped (expected), on MI355X with this recipe.
+**Verified**: 195+ tests pass, ~50 skipped (expected), on MI355X with this recipe.
 
 ---
 

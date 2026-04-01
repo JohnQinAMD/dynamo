@@ -29,14 +29,15 @@ def _with_rocm_timeout(payloads):
         p.timeout = ROCM_REQUEST_TIMEOUT
     return payloads
 
-from tests.serve.common import (
+
+from tests.serve.common import (  # noqa: E402
     WORKSPACE_DIR,
     params_with_model_mark,
     run_serve_deployment,
 )
-from tests.utils.constants import DefaultPort
-from tests.utils.engine_process import EngineConfig
-from tests.utils.payload_builder import (
+from tests.utils.constants import DefaultPort  # noqa: E402
+from tests.utils.engine_process import EngineConfig  # noqa: E402
+from tests.utils.payload_builder import (  # noqa: E402
     chat_payload_default,
     completion_payload_default,
     metric_payload_default,
@@ -52,9 +53,7 @@ class SGLangROCmConfig(EngineConfig):
     stragglers: list[str] = field(default_factory=lambda: ["SGLANG:EngineCore"])
 
 
-rocm_sglang_dir = os.path.join(
-    WORKSPACE_DIR, "examples/backends/sglang/launch/rocm"
-)
+rocm_sglang_dir = os.path.join(WORKSPACE_DIR, "examples/backends/sglang/launch/rocm")
 
 rocm_sglang_configs = {
     "rocm_aggregated": SGLangROCmConfig(
@@ -75,11 +74,13 @@ rocm_sglang_configs = {
             "SGLANG_AITER_MLA_PERSIST": "False",
         },
         frontend_port=DefaultPort.FRONTEND.value,
-        request_payloads=_with_rocm_timeout([
-            chat_payload_default(),
-            completion_payload_default(),
-            metric_payload_default(min_num_requests=4, backend="sglang"),
-        ]),
+        request_payloads=_with_rocm_timeout(
+            [
+                chat_payload_default(),
+                completion_payload_default(),
+                metric_payload_default(min_num_requests=4, backend="sglang"),
+            ]
+        ),
     ),
     "rocm_aggregated_kvbm": SGLangROCmConfig(
         name="rocm_aggregated_kvbm",
@@ -101,10 +102,38 @@ rocm_sglang_configs = {
             "DYN_KVBM_CPU_CACHE_GB": "2",
         },
         frontend_port=DefaultPort.FRONTEND.value,
-        request_payloads=_with_rocm_timeout([
-            chat_payload_default(),
-            completion_payload_default(),
-        ]),
+        request_payloads=_with_rocm_timeout(
+            [
+                chat_payload_default(),
+                completion_payload_default(),
+            ]
+        ),
+    ),
+    "rocm_disaggregated": SGLangROCmConfig(
+        name="rocm_disaggregated",
+        directory=rocm_sglang_dir,
+        script_name="agg_rocm.sh",
+        marks=[
+            pytest.mark.gpu_2,
+            pytest.mark.max_vram_gib(12.0),
+            pytest.mark.timeout(600),
+            pytest.mark.post_merge,
+            pytest.mark.rocm,
+            pytest.mark.mi355x,
+            pytest.mark.disagg,
+        ],
+        model="Qwen/Qwen3-0.6B",
+        env={
+            "HIP_VISIBLE_DEVICES": "0,1",
+            "SGLANG_AITER_MLA_PERSIST": "False",
+            "RCCL_MSCCL_ENABLE": "0",
+        },
+        frontend_port=DefaultPort.FRONTEND.value,
+        request_payloads=_with_rocm_timeout(
+            [
+                chat_payload_default(),
+            ]
+        ),
     ),
 }
 

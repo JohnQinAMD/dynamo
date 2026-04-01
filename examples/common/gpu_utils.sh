@@ -384,11 +384,17 @@ if isinstance(v, dict) and 'size' in v:
     val = s.get('value', 0) if isinstance(s, dict) else s
 else:
     val = v.get('total', v.get('size', 0))
-print(int(float(str(val).replace('MB','').replace('GB','').strip())))
+s = str(val).strip()
+if 'GB' in s:
+    print(int(float(s.replace('GB','').strip()) * 1024))
+elif 'MB' in s:
+    print(int(float(s.replace('MB','').strip())))
+else:
+    print(int(float(s)))
 " 2>/dev/null)
         fi
     fi
-    if [[ -z "$total_mib" || "$total_mib" -eq 0 ]]; then
+    if [[ -z "$total_mib" || ! "$total_mib" =~ ^[0-9]+$ || "$total_mib" -eq 0 ]]; then
         echo "gpu_gb_to_total_fraction: failed to query GPU $gpu_idx total memory" >&2
         return 1
     fi
@@ -487,11 +493,17 @@ if isinstance(v, dict) and 'size' in v:
     val = s.get('value', 0) if isinstance(s, dict) else s
 else:
     val = v.get('total', v.get('size', 0))
-print(int(float(str(val).replace('MB','').replace('GB','').strip())))
+s = str(val).strip()
+if 'GB' in s:
+    print(int(float(s.replace('GB','').strip()) * 1024))
+elif 'MB' in s:
+    print(int(float(s.replace('MB','').strip())))
+else:
+    print(int(float(s)))
 " 2>/dev/null)
         fi
     fi
-    if [[ -z "$free_mib" || "$free_mib" -eq 0 ]]; then
+    if [[ -z "$free_mib" || ! "$free_mib" =~ ^[0-9]+$ || "$free_mib" -eq 0 ]]; then
         echo "gpu_gb_to_free_fraction: failed to query GPU $gpu_idx free memory" >&2
         return 1
     fi
