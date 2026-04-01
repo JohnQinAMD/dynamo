@@ -471,10 +471,17 @@ for conc in [1, 4, 8]:
 
 ### vLLM Backend Status
 
-vLLM 0.18.1 installs via `pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/` but the `_rocm_C` extension is incompatible with the SGLang container's PyTorch build. To test vLLM on ROCm:
+**Tested with**: `vllm/vllm-openai-rocm:latest` (vLLM 0.18.1, Python 3.12, ROCm 7.0, torch 2.9.1+HIP)
+
+**Result**: vLLM engine loads and runs on MI355X, but Dynamo's launch scripts (`examples/common/gpu_utils.sh`) call `nvidia-smi` for GPU memory queries, which fails on ROCm. This causes `test_serve_deployment[aggregated]` to fail at startup.
+
+**Root cause**: `gpu_gb_to_total_fraction()` in `gpu_utils.sh` (line 364) hardcodes `nvidia-smi --query-gpu=memory.total`. On ROCm, this needs to use `amd-smi` or `rocm-smi` instead. The `rocm_utils.sh` helper exists but isn't wired into `gpu_utils.sh`.
+
+**Workaround**: Skip the memory fraction auto-detection by setting `--mem-fraction-static 0.80` explicitly in launch args (as the ROCm launch scripts `agg_rocm.sh` already do).
+
+**Container setup**:
 
 ```bash
-# Use official vLLM ROCm container (NOT the SGLang container)
 docker pull vllm/vllm-openai-rocm:latest
 
 docker run --rm -it \
@@ -482,13 +489,15 @@ docker run --rm -it \
     --group-add video --shm-size 256G --ipc=host --privileged \
     -v /mnt/vast/john/rocm-dynamo:/workspace \
     -v /mnt/vast/john/hf_cache:/root/.cache/huggingface \
-    vllm/vllm-openai-rocm:latest bash
+    --entrypoint bash \
+    vllm/vllm-openai-rocm:latest
 
-# Inside container: build Dynamo and run vLLM tests
-cd /workspace/dynamo
-bash scripts/build_maturin_py312.sh   # builds for Python 3.12
-python3 -m pytest --override-ini=filterwarnings=default \
-    tests/serve/test_vllm.py -k aggregated -v --timeout=600
+# Inside: build Dynamo (pip install from wheel, no maturin needed)
+cd /workspace/dynamo && pip install -e .
+
+# Run vLLM serve with explicit mem fraction (bypasses nvidia-smi)
+python3 -m dynamo.frontend --http-port 8000 &
+python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B --gpu-memory-utilization 0.80
 ```
 
 ### Backend Comparison
