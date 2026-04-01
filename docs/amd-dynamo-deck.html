@@ -224,11 +224,11 @@ td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px}
       <div class="arrow-down">▼</div>
 
       <div class="layer">
-        <div class="layer-label">★ AMD Disagg Transfer Backends (replace upstream NIXL/Mooncake)</div>
+        <div class="layer-label">Disagg KV Transfer (ionic 400Gb/s — no GPU Direct RDMA)</div>
         <div class="layer-row">
-          <div class="box amd" style="border-color:var(--green)"><div class="n" style="color:var(--green)">★ MoRI RDMA</div><div class="d">Native ionic<br>Primary</div></div>
-          <div class="box amd"><div class="n">★ RIXL + DRAM</div><div class="d">Pinned host<br>bounce buffer</div></div>
-          <div class="box amd"><div class="n">★ Mooncake</div><div class="d">ROCm-adapted<br>RDMA</div></div>
+          <div class="box amd" style="border-color:var(--green)"><div class="n" style="color:var(--green)">★ MoRI RDMA</div><div class="d">AMD native library<br>Primary · 81.7 req/s</div></div>
+          <div class="box amd"><div class="n">★ RIXL (NIXL port)</div><div class="d">C++ UCX auto-staging<br>GPU→DRAM→RDMA→DRAM→GPU</div></div>
+          <div class="box amd"><div class="n">★ Mooncake</div><div class="d">ROCm C++ patch<br>GPU MR fallback</div></div>
         </div>
       </div>
 
