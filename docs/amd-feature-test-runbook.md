@@ -464,10 +464,32 @@ for conc in [1, 4, 8]:
 | **Total** | **~190** | **~8** | **~50** | |
 
 **Failure root causes** (none are code bugs):
-- kv-indexer: Rust binary not compiled with `--features kv-indexer`
-- block_size=1: upstream KV Router limitation (xfail)
-- Container PID namespace: Docker isolation
-- JetStream storage: NATS `/tmp` space in container
+- kv-indexer: Rust binary not compiled with `--features kv-indexer` (5 tests)
+- block_size=1: upstream KV Router limitation, xfail (1 test)
+- Container PID namespace: Docker isolation (1 test)
+- JetStream storage: NATS `/tmp` space in container (1 test)
+
+### vLLM Backend Status
+
+vLLM 0.18.1 installs via `pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/` but the `_rocm_C` extension is incompatible with the SGLang container's PyTorch build. To test vLLM on ROCm:
+
+```bash
+# Use official vLLM ROCm container (NOT the SGLang container)
+docker pull vllm/vllm-openai-rocm:latest
+
+docker run --rm -it \
+    --device=/dev/kfd --device=/dev/dri \
+    --group-add video --shm-size 256G --ipc=host --privileged \
+    -v /mnt/vast/john/rocm-dynamo:/workspace \
+    -v /mnt/vast/john/hf_cache:/root/.cache/huggingface \
+    vllm/vllm-openai-rocm:latest bash
+
+# Inside container: build Dynamo and run vLLM tests
+cd /workspace/dynamo
+bash scripts/build_maturin_py312.sh   # builds for Python 3.12
+python3 -m pytest --override-ini=filterwarnings=default \
+    tests/serve/test_vllm.py -k aggregated -v --timeout=600
+```
 
 ### Backend Comparison
 
