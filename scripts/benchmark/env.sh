@@ -24,8 +24,8 @@ if [[ "${SKIP_CLEANUP:-}" != "1" ]]; then
     if [[ -n "$vram_used" ]]; then
         vram_free=$(echo "$vram_used" | awk '{printf "%.0f", 288 - $1}')
         echo "[INFO] GPU 0 VRAM: ${vram_used} GB used, ~${vram_free} GB free"
-        if (( $(echo "$vram_used > 50" | bc -l 2>/dev/null || echo 0) )); then
-            echo "[WARN] GPU VRAM not clean! Stale processes may cause OOM during CUDA graph capture."
+        if (( $(echo "$vram_used > 0" | bc -l 2>/dev/null || echo 0) )); then
+            echo "[WARN] GPU VRAM not clean (${vram_used} GB used)! Stale processes may cause OOM during CUDA graph capture."
             echo "       Kill all docker containers: docker rm -f \$(docker ps -aq)"
         fi
     fi
