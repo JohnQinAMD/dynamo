@@ -74,22 +74,30 @@ def _hip_sync():
 
 
 class DramStagingBuffer:
-    """Manages pinned host memory for DRAM-staged RDMA transfers."""
+    """Manages pinned host memory for DRAM-staged RDMA transfers.
+
+    Uses mmap+mlock instead of torch.pin_memory() because ionic NICs
+    reject hipHostMalloc-backed memory in ibv_reg_mr (returns EINVAL).
+    """
 
     def __init__(self, size: int, device_id: int = 0):
+        import mmap as _mmap
+
         self.size = size
         self.device_id = device_id
 
-        if torch is None:
-            raise RuntimeError("PyTorch required for DRAM staging")
+        self._mmap = _mmap.mmap(-1, size)
+        self._buf = (ctypes.c_char * size).from_buffer(self._mmap)
+        self.host_ptr = ctypes.addressof(self._buf)
 
-        self.host_tensor = torch.empty(
-            size, dtype=torch.uint8, device="cpu"
-        ).pin_memory()
-        self.host_ptr = self.host_tensor.data_ptr()
+        libc = ctypes.CDLL("libc.so.6")
+        rc = libc.mlock(ctypes.c_void_p(self.host_ptr), ctypes.c_size_t(size))
+        if rc != 0:
+            logger.warning("mlock failed (rc=%d) for %d MB", rc, size >> 20)
+
         logger.info(
-            f"DramStagingBuffer: allocated {size / (1024**2):.1f} MB "
-            f"pinned host memory at {hex(self.host_ptr)}"
+            "DramStagingBuffer: allocated %d MB mmap+mlock at %s",
+            size // (1024 * 1024), hex(self.host_ptr),
         )
 
     def copy_from_gpu(self, gpu_ptr: int, offset: int, length: int) -> None:
@@ -174,6 +182,7 @@ class DramStagingManager:
 
     def cleanup(self) -> None:
         for buf in self.buffers.values():
-            del buf.host_tensor
+            del buf._buf
+            buf._mmap.close()
         self.buffers.clear()
         self._total_allocated = 0

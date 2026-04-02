@@ -76,7 +76,7 @@ class _MrLruCache:
     MRs and evict LRU entries when approaching the limit.
     """
 
-    MAX_REGISTERED_BYTES = 2 * 1024 * 1024 * 1024  # 2GB safety (ionic ~3GB limit)
+    MAX_REGISTERED_BYTES = 200 * 1024 * 1024  # 200MB (ionic ~250MB per-device limit)
 
     def __init__(self, agent):
         self.agent = agent
@@ -257,7 +257,7 @@ def patch_nixl_for_rocm():
     # ---- 2. register_buffer_to_engine ---------------------------------------
     def _patched_register(self):
         staging: _RocmDramStaging = self._rocm_staging
-        MAX_CHUNK = 512 * 1024 * 1024  # 512MB per MR chunk (ionic safe limit)
+        MAX_CHUNK = 190 * 1024 * 1024  # 190MB per MR chunk (ionic max single MR ~199MB)
         is_decode = self.disaggregation_mode.value == "decode"
 
         if is_decode:

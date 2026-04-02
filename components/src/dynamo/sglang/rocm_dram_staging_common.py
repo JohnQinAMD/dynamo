@@ -4,19 +4,24 @@
 """Shared DRAM staging primitives for ROCm disaggregated serving.
 
 On AMD GPUs with Pensando ionic NICs, RDMA libraries cannot ``ibv_reg_mr()``
-on GPU VRAM (no GPUDirect RDMA).  This module provides a common
-``RocmDramStaging`` class that both the NIXL and Mooncake monkey-patch
-modules use to bounce KV data through pinned host memory.
+on GPU VRAM (no GPUDirect RDMA).  Additionally, ionic's ``ibv_reg_mr()``
+rejects ``hipHostMalloc``-backed memory (EINVAL) and has a ~448 MB total
+registration limit for regular memory.
+
+This module provides a common ``RocmDramStaging`` class that both the NIXL
+and Mooncake monkey-patch modules use to bounce KV data through host memory
+allocated via ``mmap`` + ``mlock`` (avoiding ``hipHostMalloc`` entirely).
 
 Data flow::
 
-    GPU VRAM  ─hipMemcpy D2H─▶  Pinned DRAM  ──RDMA──▶  Remote DRAM  ─hipMemcpy H2D─▶  GPU VRAM
+    GPU VRAM  ─hipMemcpy D2H─▶  DRAM (mmap)  ──transfer──▶  Remote DRAM  ─hipMemcpy H2D─▶  GPU VRAM
 """
 
 from __future__ import annotations
 
 import ctypes
 import logging
+import mmap
 import os
 import threading
 
@@ -66,13 +71,25 @@ class RocmDramStaging:
 
     # -- buffer management -----------------------------------------------------
 
+    _libc = None
+
+    @classmethod
+    def _get_libc(cls):
+        if cls._libc is None:
+            cls._libc = ctypes.CDLL("libc.so.6")
+        return cls._libc
+
     def create(self, gpu_ptr: int, size: int, allocate: bool = True) -> int:
         """Register a GPU buffer for staging.
+
+        Uses ``mmap`` + ``mlock`` instead of ``torch.pin_memory()`` because
+        ionic NICs reject ``hipHostMalloc``-backed memory in ``ibv_reg_mr()``
+        (returns EINVAL).
 
         Args:
             gpu_ptr: GPU buffer base address.
             size: Buffer size in bytes.
-            allocate: If ``True``, allocate pinned DRAM now (decode side).
+            allocate: If ``True``, allocate DRAM now (decode side).
                       If ``False``, record metadata only (prefill lazy mode).
 
         Returns:
@@ -80,13 +97,17 @@ class RocmDramStaging:
         """
         with self._lock:
             if allocate:
-                import torch
-
-                t = torch.empty(size, dtype=torch.uint8, device="cpu").pin_memory()
-                host_ptr = t.data_ptr()
-                self.buffers[gpu_ptr] = (t, host_ptr, size)
+                m = mmap.mmap(-1, size)
+                buf = (ctypes.c_char * size).from_buffer(m)
+                host_ptr = ctypes.addressof(buf)
+                libc = self._get_libc()
+                rc = libc.mlock(ctypes.c_void_p(host_ptr), ctypes.c_size_t(size))
+                if rc != 0:
+                    logger.warning("mlock failed (rc=%d) for %d MB — "
+                                   "proceeding without locked pages", rc, size >> 20)
+                self.buffers[gpu_ptr] = ((m, buf), host_ptr, size)
                 logger.info(
-                    "DRAM staging: %d MB  GPU %s → host %s",
+                    "DRAM staging: %d MB  GPU %s → host %s (mmap+mlock)",
                     size // (1024 * 1024),
                     hex(gpu_ptr),
                     hex(host_ptr),
@@ -102,18 +123,19 @@ class RocmDramStaging:
                 return gpu_ptr
 
     def get_staging_region(self, gpu_addr: int, nbytes: int):
-        """Allocate a transient pinned region and copy GPU data into it.
+        """Allocate a transient mmap region and copy GPU data into it.
 
-        Returns ``(host_ptr, tensor)`` — caller must keep *tensor* alive
-        until the RDMA transfer completes.
+        Returns ``(host_ptr, ref)`` — caller must keep *ref* alive
+        until the transfer completes.
         """
-        import torch
-
-        t = torch.empty(nbytes, dtype=torch.uint8, device="cpu").pin_memory()
-        host_ptr = t.data_ptr()
+        m = mmap.mmap(-1, nbytes)
+        buf = (ctypes.c_char * nbytes).from_buffer(m)
+        host_ptr = ctypes.addressof(buf)
+        libc = self._get_libc()
+        libc.mlock(ctypes.c_void_p(host_ptr), ctypes.c_size_t(nbytes))
         self.copy_d2h_direct(gpu_addr, host_ptr, nbytes)
         self.sync()
-        return host_ptr, t
+        return host_ptr, (m, buf)
 
     # -- HIP helpers -----------------------------------------------------------
 
