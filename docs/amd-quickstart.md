@@ -84,10 +84,19 @@ Disaggregated prefill-decode serving with MoRI RDMA KV cache transfer.
 
 ### Prerequisites
 
-1. **Bind-mount host libionic** into containers:
+1. **Fix libionic ABI** in each container (bind-mount is unreliable; use `docker cp`):
 ```bash
-LIBIONIC=$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* 2>/dev/null | head -1)
-# Add to docker run: ${LIBIONIC:+-v $LIBIONIC:/usr/lib/x86_64-linux-gnu/libionic.so.1:ro}
+# From the HOST, after docker run:
+HOST_LIB=$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1)
+docker cp "$HOST_LIB" CONTAINER:/usr/lib/x86_64-linux-gnu/libionic.so.1
+
+# Verify inside container:
+ibv_devinfo 2>&1 | grep hca_id | wc -l   # must be 8
+
+# Or use the helper script from inside the container:
+bash scripts/benchmark/setup_network.sh --verify
+# Or from the host:
+bash scripts/benchmark/setup_network.sh --fix-abi CONTAINER_NAME
 ```
 
 2. **Configure ionic IPv4** on all nodes:
@@ -166,39 +175,77 @@ python3 -m dynamo.sglang \
 
 ## Benchmarking (InferenceX-Aligned)
 
-### Pre-flight Checklist
+Two paths: **manual** (SSH into nodes) or **InferenceX CI** (Slurm).
+See [`scripts/benchmark/README.md`](../scripts/benchmark/README.md) for full step-by-step.
 
-Before running benchmarks, verify on **every node**:
+### Quick Start (Manual, Single-Node)
 
 ```bash
-# 1. Kill ALL stale containers (they hold GPU VRAM even when idle)
+# Pre-flight: clean VRAM
 docker rm -f $(docker ps -aq)
 
-# 2. Verify GPU VRAM is clean (should be < 5 GB used)
-amd-smi monitor --gpu all | awk 'NR>1{print $1, $NF}'
+# Start container
+docker run -d --name bench --network=host --privileged \
+    --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
+    --group-add video --shm-size 256G --ipc=host \
+    -v $(pwd):/workspace -v /path/to/models:/models \
+    amdprimus/dynamo-rocm-sglang:latest tail -f /dev/null
 
-# 3. Verify ionic connectivity (for disaggregated tests)
-bash scripts/benchmark/setup_network.sh --verify
-bash scripts/benchmark/setup_network.sh --match <REMOTE_NODE>
+# Fix ionic ABI (from HOST)
+bash scripts/benchmark/setup_network.sh --fix-abi bench
+
+# Run benchmark (inside container)
+docker exec -it bench bash
+cd /workspace/dynamo/scripts/benchmark
+export MODEL_DIR=/models MODEL_NAME=DeepSeek-R1-0528
+export FRONTEND_TYPE=dynamo
+export BENCH_MAX_CONCURRENCY="4 8 16 32 64"
+bash server.sh
 ```
 
-Run benchmarks that match InferenceX parameters:
+### Multi-Node Disaggregated (Manual)
 
 ```bash
-# Set up environment
-source scripts/benchmark/env.sh
+# On EACH node: start container + fix ABI (from HOST)
+docker run -d --name bench ... amdprimus/dynamo-rocm-sglang:latest tail -f /dev/null
+bash scripts/benchmark/setup_network.sh --fix-abi bench
 
-# Configure
-export MODEL_DIR=/models
-export MODEL_NAME=DeepSeek-R1-0528
-export FRONTEND_TYPE=dynamo    # or "sglang" for sglang_router
-export BENCH_INPUT_LEN=1024
-export BENCH_OUTPUT_LEN=1024
-export BENCH_MAX_CONCURRENCY="4 8 16 32 64 128 256"
+# Inside container on each node: configure ionic IPv4
+docker exec bench bash -c 'bash /workspace/dynamo/scripts/benchmark/setup_network.sh'
 
-# Run
-bash scripts/benchmark/server.sh  # starts servers + runs benchmarks
+# Head node (NODE_RANK=0): runs prefill + frontend + benchmarks
+docker exec -it bench bash -c '
+    cd /workspace/dynamo/scripts/benchmark
+    export MODEL_DIR=/models MODEL_NAME=DeepSeek-R1-0528
+    export FRONTEND_TYPE=dynamo IPADDRS="10.0.0.1,10.0.0.2" xP=1 yD=1 NODE_RANK=0
+    export PREFILL_TP_SIZE=8 DECODE_TP_SIZE=8
+    bash server.sh'
+
+# Decode node (NODE_RANK=1): runs decode worker
+docker exec -it bench bash -c '
+    cd /workspace/dynamo/scripts/benchmark
+    export MODEL_DIR=/models MODEL_NAME=DeepSeek-R1-0528
+    export FRONTEND_TYPE=dynamo IPADDRS="10.0.0.1,10.0.0.2" xP=1 yD=1 NODE_RANK=1
+    export PREFILL_TP_SIZE=8 DECODE_TP_SIZE=8
+    bash server.sh'
 ```
+
+### InferenceX CI (Slurm)
+
+```bash
+cd InferenceX/benchmarks/multi_node/amd_utils
+
+export SLURM_ACCOUNT=myaccount SLURM_PARTITION=compute TIME_LIMIT=08:00:00
+export MODEL_PATH=/nfsdata MODEL_NAME=deepseek-ai/DeepSeek-R1-0528
+export CONTAINER_IMAGE=amdprimus/dynamo-rocm-sglang:latest
+export RUNNER_NAME=dsr1-fp8-mi355x
+export FRONTEND_TYPE=dynamo   # optional, default: sglang
+
+# 1 prefill node + 2 decode nodes, ISL/OSL=1024, concurrencies 4-256
+bash submit.sh  1 1  2 2  1024 1024  "4x8x16x32x64x128x256"  inf
+```
+
+Slurm automatically handles: container creation, ionic ABI fix, IPv4 config, server launch, and benchmarking.
 
 ## AMD-Specific Environment Variables
 
@@ -221,7 +268,7 @@ export SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1200
 
 | Problem | Fix |
 |---------|-----|
-| `ibv_devinfo` shows ABI warnings | Bind-mount host libionic (see Prerequisites) |
+| `ibv_devinfo` shows ABI warnings | `docker cp` host libionic into container (see Prerequisites). Bind-mount (`-v`) is unreliable with symlinks. |
 | `std::bad_cast` on disagg startup | Run `setup_network.sh` to configure ionic IPv4 |
 | `ibv_modify_qp` timeout | Check ionic subnet matching: `setup_network.sh --match <REMOTE>` |
 | Very slow first inference (~5 min) | Normal: aiter JIT + CUDA graph capture. Send warmup request. |

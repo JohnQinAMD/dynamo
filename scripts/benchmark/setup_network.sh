@@ -65,9 +65,39 @@ assign_ips() {
     done
 }
 
+# --- Fix libionic ABI inside a running container ---
+fix_abi() {
+    local container=${1:-}
+    if [[ -z "$container" ]]; then
+        echo "Usage: setup_network.sh --fix-abi CONTAINER_NAME [HOST_NODE]"
+        echo "  Copies host libionic into a running Docker container."
+        echo "  HOST_NODE defaults to current host."
+        exit 1
+    fi
+    local host_lib=$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* 2>/dev/null | head -1)
+    if [[ -z "$host_lib" ]]; then
+        echo "[ERROR] No libionic.so.1.1.* found on host"
+        exit 1
+    fi
+    echo "Copying $host_lib → $container:/usr/lib/x86_64-linux-gnu/libionic.so.1"
+    docker cp "$host_lib" "$container:/usr/lib/x86_64-linux-gnu/libionic.so.1"
+    local dev_count=$(docker exec "$container" ibv_devinfo 2>/dev/null | grep -c "hca_id" || true)
+    echo "Devices visible after fix: $dev_count (expected 8)"
+    if [[ "$dev_count" -lt 8 ]]; then
+        echo "[WARN] Expected 8 ionic devices, got $dev_count"
+    else
+        echo "[OK] libionic ABI fixed successfully"
+    fi
+}
+
 # --- Verify ---
 verify() {
     echo "=== Ionic Verification ==="
+    local abi_warn=$(ibv_devinfo 2>&1 | grep -c "does not support the kernel ABI" || true)
+    if [[ "$abi_warn" -gt 0 ]]; then
+        echo "  [ERROR] libionic ABI mismatch detected ($abi_warn warnings)"
+        echo "  Run: setup_network.sh --fix-abi CONTAINER_NAME"
+    fi
     local dev_count=$(ibv_devinfo 2>&1 | grep -c "hca_id" || true)
     echo "  Devices visible: $dev_count"
     for i in 0 1 2 3 4 5 6 7; do
@@ -82,14 +112,16 @@ verify() {
 NODE_ID=""
 ACTION="assign"
 REMOTE=""
+CONTAINER=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --node-id) NODE_ID="$2"; shift 2 ;;
         --verify) ACTION="verify"; shift ;;
         --match) ACTION="match"; REMOTE="$2"; shift 2 ;;
+        --fix-abi) ACTION="fix-abi"; CONTAINER="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
         -h|--help)
-            echo "Usage: setup_network.sh [--node-id N] [--verify] [--match REMOTE_HOST]"
+            echo "Usage: setup_network.sh [--node-id N] [--verify] [--match REMOTE_HOST] [--fix-abi CONTAINER]"
             exit 0 ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
@@ -98,6 +130,7 @@ done
 case "$ACTION" in
     verify) verify ;;
     match) match_subnets "$REMOTE" ;;
+    fix-abi) fix_abi "$CONTAINER" ;;
     assign)
         if [[ -z "$NODE_ID" ]]; then
             NODE_ID=$(hostname | grep -oE '[0-9]+$' | tail -1 || true)

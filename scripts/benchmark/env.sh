@@ -31,6 +31,17 @@ if [[ "${SKIP_CLEANUP:-}" != "1" ]]; then
     fi
 fi
 
+# --- Verify libionic ABI (ionic RDMA driver must match host kernel) ---
+if ls /sys/class/infiniband/ionic_0 &>/dev/null; then
+    abi_warn=$(ibv_devinfo 2>&1 | grep -c "does not support the kernel ABI" || true)
+    if [[ "$abi_warn" -gt 0 ]]; then
+        echo "[ERROR] ionic ABI mismatch: container libionic does not match host kernel."
+        echo "        Fix from HOST: docker cp \$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1) CONTAINER:/usr/lib/x86_64-linux-gnu/libionic.so.1"
+        echo "        Or use the fix_libionic() function in run_infx_benchmarks.sh"
+        exit 1
+    fi
+fi
+
 # --- Management IP (NOT hostname -I which may return ionic IP) ---
 export MGMT_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7}')
 

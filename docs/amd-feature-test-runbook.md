@@ -55,40 +55,37 @@ docker build -f dynamo/container/Dockerfile.rocm-atom \
 ### Launch Container
 
 ```bash
-# Find host libionic version
-LIBIONIC=$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* 2>/dev/null | head -1)
-
-docker run --rm -it \
+docker run -d --name my-dynamo \
     --network=host --privileged \
     --device=/dev/kfd --device=/dev/dri --device=/dev/infiniband \
     --group-add video --shm-size 256G --ipc=host \
     -v /path/to/hf_cache:/root/.cache/huggingface \
-    ${LIBIONIC:+-v $LIBIONIC:/usr/lib/x86_64-linux-gnu/libionic.so.1:ro} \
     dynamo-rocm-sglang:latest bash
 ```
 
-> **Note**: The `-v $LIBIONIC:...libionic.so.1:ro` bind mount ensures the container uses the
-> host's ionic RDMA driver, avoiding ABI version mismatches that prevent ionic devices from being
-> visible inside the container. This is required for all MoRI disagg tests.
+### Ionic Driver ABI Fix (REQUIRED for MoRI RDMA)
 
-### Ionic Driver ABI Fix
-
-Container and host `libionic` versions may differ. The recommended fix is to **bind-mount the host library** at container launch (shown in the docker run command above). Alternatively:
+Container and host `libionic` versions almost always differ, causing `ibv_devinfo` to show
+0 devices (all ionic ports invisible). **Use `docker cp` to fix** — bind-mount (`-v`) is
+unreliable because Docker does not correctly override symlink targets inside the container.
 
 ```bash
-# Inside container: auto-fix script
-fix-ionic-abi.sh
+# From the HOST — copy host libionic into the running container:
+HOST_LIB=$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1)
+docker cp "$HOST_LIB" my-dynamo:/usr/lib/x86_64-linux-gnu/libionic.so.1
 
-# Verify: should show all 8 ionic devices without ABI warnings
-ibv_devinfo 2>&1 | grep hca_id | wc -l   # expect: 8
+# Or use the helper script:
+# bash scripts/benchmark/setup_network.sh --fix-abi my-dynamo
+
+# Verify INSIDE container — must show 8 devices with no ABI warnings:
+docker exec my-dynamo ibv_devinfo 2>&1 | grep hca_id | wc -l   # expect: 8
 ```
 
-> **If `ibv_devinfo` shows 0 devices or ABI warnings**: The container's libionic does not match
-> the host kernel module. Either bind-mount the host library (preferred) or manually copy:
-> ```bash
-> docker cp /usr/lib/x86_64-linux-gnu/libionic.so.1.1.X CONTAINER:/usr/lib/x86_64-linux-gnu/
-> docker exec CONTAINER bash -c "ln -sf libionic.so.1.1.X /usr/lib/x86_64-linux-gnu/libionic.so.1; ldconfig"
-> ```
+> **Why not bind-mount?** Docker's `-v host.so:/container/libionic.so.1:ro` should work in
+> theory, but in practice the container's `libionic.so.1` is a symlink to
+> `libionic.so.1.0.54.0-149.gXXXXXXXX`. Docker follows the symlink and mounts at the target
+> path, leaving the symlink itself unchanged. The result: the old library is still loaded via
+> the symlink. `docker cp` directly overwrites the symlink with the correct file.
 
 ---
 
@@ -286,21 +283,18 @@ curl -s http://localhost:8000/v1/chat/completions \
 
 MoRI RDMA requires **every ionic port to have an IPv4 address**. Without IPv4, the RDMA GID table lacks IPv4-mapped entries and `ibv_modify_qp` fails with `EINVAL`, causing silent process death. This is the most common cause of MoRI disagg failures.
 
-**Step 1: Verify ionic driver ABI** (inside container):
+**Step 1: Fix ionic driver ABI** (from HOST, after `docker run`):
 
 ```bash
-# Fix ionic ABI mismatch between container and host
-# Option A: bind-mount host library at container start
-docker run ... \
-    -v /usr/lib/x86_64-linux-gnu/libionic.so.1.1.54.0-185:/usr/lib/x86_64-linux-gnu/libionic.so.1:ro \
-    ...
+# Use docker cp — bind-mount (-v) is unreliable with symlinks (see "Launch Container" above)
+HOST_LIB=$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1)
+docker cp "$HOST_LIB" <container>:/usr/lib/x86_64-linux-gnu/libionic.so.1
 
-# Option B: copy host library into running container
-docker cp /usr/lib/x86_64-linux-gnu/libionic.so.1.1.54.0-185 <container>:/usr/lib/x86_64-linux-gnu/
-docker exec <container> bash -c "ln -sf libionic.so.1.1.54.0-185 /usr/lib/x86_64-linux-gnu/libionic.so.1; ldconfig"
+# Or use the helper:
+bash scripts/benchmark/setup_network.sh --fix-abi <container>
 
-# Verify: should show all 8 ionic devices without ABI warnings
-ibv_devinfo 2>&1 | grep hca_id   # expect 8 devices
+# Verify INSIDE container:
+ibv_devinfo 2>&1 | grep hca_id   # must show 8 devices, no ABI warnings
 ```
 
 **Step 2: Assign IPv4 addresses to ALL ionic ports on EVERY node**:
@@ -621,7 +615,7 @@ for conc in [1, 4, 8]:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `libibverbs: Warning: Driver ionic does not support the kernel ABI` | Container/host libionic version mismatch | Bind-mount host libionic: `-v /usr/lib/x86_64-linux-gnu/libionic.so.1.1.X:/usr/lib/x86_64-linux-gnu/libionic.so.1:ro` |
+| `libibverbs: Warning: Driver ionic does not support the kernel ABI` | Container/host libionic version mismatch | `docker cp $(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* \| head -1) CONTAINER:/usr/lib/x86_64-linux-gnu/libionic.so.1` — bind-mount (`-v`) is unreliable with symlinks |
 | `stdbool.h not found` during build | bindgen can't find GCC headers | `export BINDGEN_EXTRA_CLANG_ARGS="-I$(find /usr/lib/gcc -name stdbool.h \| head -1 \| xargs dirname)"` |
 | `RouterConfig.__new__() got unexpected keyword` | Stale Rust wheel in container | `maturin build --release --out /tmp/w && pip install /tmp/w/*.whl --force-reinstall` |
 | `HIP_VISIBLE_DEVICES != CUDA_VISIBLE_DEVICES` | vLLM 0.18.1 validates env var consistency | Don't set `HIP_VISIBLE_DEVICES` when running vLLM tests |

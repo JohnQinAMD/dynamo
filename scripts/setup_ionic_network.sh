@@ -111,7 +111,7 @@ if $FIX_ABI; then
             ldconfig
             echo "Fixed: using $(basename "$HOST_LIB")"
         else
-            echo "WARNING: No libionic found. Bind-mount from host recommended."
+            echo "WARNING: No libionic found. Run from HOST: docker cp \$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1) CONTAINER:/usr/lib/x86_64-linux-gnu/libionic.so.1"
         fi
     fi
     echo ""
@@ -128,7 +128,7 @@ if $VERIFY_ONLY; then
         echo "  OK: $dev_count ionic devices visible"
     else
         echo "  FAIL: Only $dev_count devices visible (expected 8)"
-        echo "  Fix: Bind-mount host libionic or run --fix-abi"
+        echo "  Fix from HOST: docker cp \$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1) CONTAINER:/usr/lib/x86_64-linux-gnu/libionic.so.1"
         ibv_devinfo 2>&1 | grep "Warning" | head -3
     fi
     echo ""
