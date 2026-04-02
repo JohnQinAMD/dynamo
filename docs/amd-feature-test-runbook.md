@@ -651,6 +651,7 @@ for conc in [1, 4, 8]:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | DEP8 decode crashes with `NCCL error: unhandled cuda error` | `MORI_DISABLE_AUTO_XGMI=1` prevents MoRI from using XGMI for intra-node EP A2A communication | **Do NOT set `MORI_DISABLE_AUTO_XGMI=1`** for EP/DP configs. InferenceX does not set it. |
+| **DEP8 decode `RuntimeError: unknown parameter type`** | SGLang `scheduler_dp_attn_mixin.py:93` crashes during first decode batch `all_gather` on some container/GPU states | Upstream SGLang bug. Workaround: restart with fresh containers and clean GPU state (`docker rm -f` + new `docker run`). May require specific container image version. |
 | DEP8 decode crashes at MoRI RDMA init | Missing InferenceX MoRI environment variables for EP mode | Set all required env vars from InferenceX `env.sh`: `MORI_SHMEM_MODE=ISOLATION`, `MORI_EP_LAUNCH_CONFIG_MODE=AUTO`, `MORI_IO_QP_MAX_SEND_WR=16384`, `MORI_IO_QP_MAX_CQE=32768`, `MORI_IO_QP_MAX_SGE=4` |
 | EP/DP disagg KV transfer fails (`ibv_modify_qp` timeout) | Same ionic subnet mismatch as above, but via `--disaggregation-ib-device` | Specify only matching ionic devices in `--disaggregation-ib-device`. Auto-detect matching devices using GID subnet prefix (4th hex group in `/sys/class/infiniband/ionic_N/ports/1/gids/1`). |
 
