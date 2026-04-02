@@ -11,6 +11,26 @@
 #   MORI_RDMA_TC   RDMA traffic class (auto-detected from nicctl or hostname)
 #   FRONTEND_TYPE  "dynamo" or "sglang" (default: sglang)
 
+# --- Pre-flight: clean stale containers that hold GPU VRAM ---
+if [[ "${SKIP_CLEANUP:-}" != "1" ]]; then
+    stale=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -v "$(hostname)" || true)
+    if [[ -n "$stale" ]]; then
+        echo "[WARN] Found running containers that may hold GPU VRAM: $stale"
+        echo "       Run 'docker rm -f <name>' to free VRAM before benchmarking."
+        echo "       Set SKIP_CLEANUP=1 to suppress this warning."
+    fi
+    # Check GPU VRAM usage
+    vram_used=$(amd-smi monitor --gpu 0 2>/dev/null | awk 'NR==2{print $NF}' | cut -d/ -f1)
+    if [[ -n "$vram_used" ]]; then
+        vram_free=$(echo "$vram_used" | awk '{printf "%.0f", 288 - $1}')
+        echo "[INFO] GPU 0 VRAM: ${vram_used} GB used, ~${vram_free} GB free"
+        if (( $(echo "$vram_used > 50" | bc -l 2>/dev/null || echo 0) )); then
+            echo "[WARN] GPU VRAM not clean! Stale processes may cause OOM during CUDA graph capture."
+            echo "       Kill all docker containers: docker rm -f \$(docker ps -aq)"
+        fi
+    fi
+fi
+
 # --- Management IP (NOT hostname -I which may return ionic IP) ---
 export MGMT_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7}')
 

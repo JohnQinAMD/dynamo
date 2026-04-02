@@ -166,6 +166,22 @@ python3 -m dynamo.sglang \
 
 ## Benchmarking (InferenceX-Aligned)
 
+### Pre-flight Checklist
+
+Before running benchmarks, verify on **every node**:
+
+```bash
+# 1. Kill ALL stale containers (they hold GPU VRAM even when idle)
+docker rm -f $(docker ps -aq)
+
+# 2. Verify GPU VRAM is clean (should be < 5 GB used)
+amd-smi monitor --gpu all | awk 'NR>1{print $1, $NF}'
+
+# 3. Verify ionic connectivity (for disaggregated tests)
+bash scripts/benchmark/setup_network.sh --verify
+bash scripts/benchmark/setup_network.sh --match <REMOTE_NODE>
+```
+
 Run benchmarks that match InferenceX parameters:
 
 ```bash
