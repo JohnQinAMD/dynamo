@@ -226,12 +226,16 @@ Prefill Node                          Decode Node
 
 | Resource | Description |
 |----------|-------------|
+| **[Quickstart](docs/amd-quickstart.md)** | Get running on MI300X/MI325X/MI355X in minutes |
 | **[Deployment Guide](docs/amd-rocm-guide.md)** | Containers, networking, 9 deployment examples, Slurm, K8s |
 | **[Build Guide](docs/amd-rocm-build.md)** | Rust bindings, RIXL, HIP kernels |
 | **[System Design](docs/amd-system-design.md)** | Architecture diagrams, additive change strategy |
 | **[Performance Report](docs/amd-performance-report.md)** | 20 benchmarks across 6 MI355X nodes |
 | **[Test Plan](docs/amd-test-plan.md)** | 195+ tests passing, CI matrix for Python 3.10 + 3.12 |
 | **[Feature Test Runbook](docs/amd-feature-test-runbook.md)** | 11 manual feature tests + troubleshooting guide |
+| **[Ionic RDMA Fix Guide](docs/ionic-rdma-fixes.md)** | All ionic RDMA issues, cross-backend fixes, preflight checks |
+| **[Adaptation Review](docs/amd-adaptation-review-report.md)** | Code review of ROCm adaptations: scope, inventory, status |
+| **[InferenceX Benchmarks](benchmarks/inferencex/README.md)** | Reproduce and compare with InferenceX official results |
 
 > **Branch**: [`amd-dynamo`](https://github.com/JohnQinAMD/dynamo/tree/amd-dynamo) — 99.4% additive (no upstream code removed), upstream-rebaseable.
 
