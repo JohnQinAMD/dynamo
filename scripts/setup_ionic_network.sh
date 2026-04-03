@@ -130,6 +130,7 @@ if $VERIFY_ONLY; then
         echo "  FAIL: Only $dev_count devices visible (expected 8)"
         echo "  Fix from HOST: docker cp \$(ls /usr/lib/x86_64-linux-gnu/libionic.so.1.1.* | head -1) CONTAINER:/usr/lib/x86_64-linux-gnu/libionic.so.1"
         ibv_devinfo 2>&1 | grep "Warning" | head -3
+        all_ok=false
     fi
     echo ""
 
@@ -167,9 +168,17 @@ if $VERIFY_ONLY; then
         echo "  Result: $pass/8 paths OK, $fail/8 failed"
         if [ "$fail" -gt 0 ]; then
             echo "  FIX: Run 'bash setup_ionic_network.sh --node-id $REMOTE_ID' on the remote node"
+            all_ok=false
         fi
     fi
-    exit 0
+
+    if $all_ok; then
+        exit 0
+    else
+        echo ""
+        echo "Verification FAILED — fix issues above"
+        exit 1
+    fi
 fi
 
 # --- Configure IPs ---
@@ -192,7 +201,7 @@ for i in 0 1 2 3 4 5 6 7; do
     fi
 
     target_ip="192.168.${subnet}.${NODE_ID}/24"
-    existing=$(ip -4 addr show "$iface" 2>/dev/null | grep "192.168.${subnet}\." | head -1)
+    existing=$(ip -4 addr show "$iface" 2>/dev/null | grep "192.168.${subnet}\." | head -1 || true)
 
     if [ -n "$existing" ]; then
         echo "  OK: ionic_$i ($iface) already has $target_ip"
@@ -201,7 +210,7 @@ for i in 0 1 2 3 4 5 6 7; do
         ip link set "$iface" up 2>/dev/null || true
         echo "  SET: ionic_$i ($iface) → $target_ip"
     fi
-    ((configured++))
+    configured=$((configured + 1))
 done
 
 echo ""

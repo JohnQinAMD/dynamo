@@ -29,7 +29,7 @@ Data flow with patch active:
 
     Prefill GPU KV ─hipMemcpy D2H─▶ Prefill DRAM staging
         ──── Mooncake RDMA WRITE (chunked MR) ────▶
-    Decode DRAM staging ─hipMemcpy H2D─▶ Decode GPU KV
+    Decode slab ─hipMemcpy H2D─▶ Decode GPU KV   (direct, no staging memcpy)
 
 ionic ``ibv_reg_mr()`` limitations handled by chunked registration:
   - EINVAL on ``hipHostMalloc``-backed memory → use mmap+mlock instead
@@ -271,6 +271,12 @@ def patch_mooncake_for_rocm():
         slab_ptr = _ctypes.addressof(slab_buf)
         libc = _RocmDramStaging._get_libc()
         libc.mlock(_ctypes.c_void_p(slab_ptr), _ctypes.c_size_t(slab_size))
+
+        # NUMA-bind slab pages to the ionic NIC's node, then register
+        # with HIP so hipMemcpyAsync can DMA directly from the slab.
+        _RocmDramStaging.numa_bind_buffer(slab_ptr, slab_size)
+        staging.hip_host_register(slab_ptr, slab_size)
+
         real_engine = self.engine._real if hasattr(self.engine, "_real") else self.engine
         real_engine.register(slab_ptr, slab_size)
         self._recv_slab = (slab_mmap, slab_buf, slab_ptr, slab_size)
@@ -428,17 +434,16 @@ def patch_mooncake_for_rocm():
 
     MooncakeKVReceiver.init = _patched_recv_init
 
-    # ---- 6. MooncakeKVReceiver.poll — slab→DRAM→GPU or DRAM→GPU -------------
+    # ---- 6. MooncakeKVReceiver.poll — slab→GPU (direct) or DRAM→GPU --------
     def _patched_recv_poll(self):
         from sglang.srt.disaggregation.base.conn import KVPoll
-        import ctypes as _ctypes
 
         result = _orig_recv_poll(self)
         if result == KVPoll.Success and hasattr(self, "_staging_kv_indices"):
             staging: _RocmDramStaging = self.kv_mgr._rocm_staging
 
             if hasattr(self.kv_mgr, "_recv_slab"):
-                # Slab mode: copy slab → DRAM staging → GPU
+                # Slab mode: copy slab → GPU directly via hipMemcpy
                 _, _, slab_ptr, slab_size = self.kv_mgr._recv_slab
                 num_layers = len(self.kv_mgr.kv_args.kv_data_ptrs)
                 layer_slab = slab_size // max(num_layers, 1)
@@ -453,14 +458,12 @@ def patch_mooncake_for_rocm():
                     for idx in self._staging_kv_indices:
                         offset = int(idx) * item_len
                         if offset + item_len <= buf_size and offset + item_len <= layer_slab:
-                            # slab → DRAM
-                            _ctypes.memmove(
-                                host_base + offset,
+                            # slab → GPU directly (skip DRAM staging memmove)
+                            staging.copy_h2d_direct(
                                 slab_layer_base + offset,
+                                gpu_ptr + offset,
                                 item_len,
                             )
-                            # DRAM → GPU
-                            staging.copy_h2d(gpu_ptr + offset, item_len)
                 staging.sync()
             else:
                 # Non-slab mode: DRAM → GPU directly

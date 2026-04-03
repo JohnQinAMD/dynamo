@@ -192,6 +192,7 @@ The AMD adaptation of NVIDIA Dynamo spans **~15,000 lines** of additive code acr
 |------|---------|
 | `components/src/dynamo/sglang/rocm_dram_staging_common.py` | Shared `RocmDramStaging` base class with thread safety |
 | `container/Dockerfile.rocm-vllm` | vLLM + Dynamo + RIXL + kv-indexer image |
+| `container/Dockerfile.rocm-atom` | Atom + Dynamo + RIXL + kv-indexer image (MI355X) |
 | `container/constraints-rocm.txt` | Pinned pip dependencies for reproducible builds |
 | `tests/basic/test_bug_fixes.py` | 52 unit tests covering all issues (P0-P3 + cosmetic) |
 | `scripts/validate_vllm_rocm_features.sh` | vLLM ROCm feature validation |

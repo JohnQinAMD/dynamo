@@ -109,8 +109,10 @@ bash scripts/benchmark/setup_network.sh --verify  # check config
 ```bash
 etcd &
 nats-server -p 4222 -js &
-export ETCD_ENDPOINTS=http://$(hostname -I | awk '{print $1}'):2379
-export NATS_SERVER=nats://$(hostname -I | awk '{print $1}'):4222
+# Use ip route (not hostname -I, which may return ionic IP on MI355X nodes)
+MY_IP=$(ip route get 1.1.1.1 | awk '/src/ {print $7}')
+export ETCD_ENDPOINTS=http://${MY_IP}:2379
+export NATS_SERVER=nats://${MY_IP}:4222
 ```
 
 ### 1P1D (1 Prefill + 1 Decode, 2 nodes)
@@ -276,6 +278,7 @@ export SGLANG_DISAGGREGATION_WAITING_TIMEOUT=1200
 
 ## Next Steps
 
+- [Ionic RDMA Fix Guide](ionic-rdma-fixes.md) — all ionic RDMA issues, cross-backend fixes, lessons learned
 - [Feature Test Runbook](amd-feature-test-runbook.md) — full test suite, ionic debugging
 - [Deployment Guide](amd-rocm-guide.md) — containers, Kubernetes, production config
 - [System Design](amd-system-design.md) — architecture and data flow diagrams

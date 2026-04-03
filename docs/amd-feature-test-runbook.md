@@ -98,7 +98,7 @@ Start infrastructure and a worker, then send a request — all in one block:
 export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export SGLANG_AITER_MLA_PERSIST=False
 export RCCL_MSCCL_ENABLE=0
-MY_IP=$(hostname -I | awk '{print $1}')
+MY_IP=$(ip route get 1.1.1.1 | awk '/src/ {print $7}')  # NOT hostname -I (may return ionic IP)
 
 # Infrastructure
 rm -rf /tmp/default.etcd
@@ -277,7 +277,16 @@ curl -s http://localhost:8000/v1/chat/completions \
 
 ## Multi-Node Disaggregated Serving
 
-> Requires 2 nodes with ionic NICs. Complete Prerequisites on BOTH nodes.
+> Requires 2+ nodes with ionic NICs on the same switch fabric. Complete Prerequisites on ALL nodes.
+>
+> **Run preflight first:** `bash dynamo/scripts/preflight_check.sh <node1> <node2> [node3]`
+> This validates SSH, Docker, GPU, ionic (devices + IPv4 + subnet match), NFS mount, and management IP in one pass. See [preflight docs](ionic-rdma-fixes.md#preflight-check-script).
+
+**Important notes:**
+- `--ep-dispatch-algorithm fake` (in InferenceX base_flags) **crashes in TP-only mode**. Only use it when EP is enabled.
+- Router `--decode` requires **separate flags per URL**: `--decode http://d1:8000 --decode http://d2:8000` (not space-separated).
+- `setup_ionic_network.sh` can exit successfully without assigning all 8 IPv4 addresses. Always verify 8/8 after running.
+- Known excluded nodes: chi2811 (no ionic), chi2881 (no NFS/vast mount).
 
 ### Ionic Network Configuration (CRITICAL)
 
@@ -611,6 +620,10 @@ for conc in [1, 4, 8]:
 
 ## Troubleshooting
 
+> For a comprehensive catalog of all ionic RDMA issues, cross-backend
+> applicability, and lessons learned, see
+> [Ionic RDMA Fix Guide](ionic-rdma-fixes.md).
+
 ### Container & Driver Issues
 
 | Symptom | Cause | Fix |
@@ -771,7 +784,7 @@ python3 -m sglang.launch_server --model-path /models/DeepSeek-R1-0528 \
     --moe-a2a-backend mori --deepep-mode normal \
     --enable-dp-attention --moe-dense-tp-size 1 --enable-dp-lm-head \
     --disaggregation-mode decode \
-    --disaggregation-ib-device ionic_1 \
+    --disaggregation-ib-device ionic_0,ionic_1,ionic_2,ionic_3,ionic_4,ionic_5,ionic_6,ionic_7 \
     --disaggregation-transfer-backend mori \
     --kv-cache-dtype fp8_e4m3 --attention-backend aiter \
     --mem-fraction-static 0.85 --max-running-requests 4096 \

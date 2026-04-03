@@ -31,12 +31,24 @@ scripts/benchmark/
 
 ### Step 0: Pre-flight (run on EVERY node)
 
+**Recommended:** Use the standardized preflight script which checks 11 items
+(SSH, Docker, GPU, ionic devices + IPv4 + subnet match, NFS mount, management IP):
+
+```bash
+bash dynamo/scripts/preflight_check.sh <node1> <node2> [node3]
+```
+
+Or manual minimal check:
+
 ```bash
 # Kill stale containers — they hold GPU VRAM even when idle
 docker rm -f $(docker ps -aq)
 
 # Verify VRAM is clean (all GPUs < 1 GB)
 amd-smi monitor --gpu all | awk 'NR>1{print $1, $NF}'
+
+# Get management IP (NOT hostname -I, which may return ionic IP on MI355X)
+MY_IP=$(ip route get 1.1.1.1 | awk '/src/ {print $7}')
 ```
 
 ### Step 1: Start containers on each node

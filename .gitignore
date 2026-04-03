@@ -20,7 +20,7 @@ plans/
 **/[Rr]elease/
 **/[Tt][Mm][Pp]/
 **/*.etcd
-
+/docs/design/*
 .markdownlint.json
 CMakeCache.txt
 *.log
@@ -126,7 +126,12 @@ worklogs/
 
 # Benchmarks
 benchmarks/results
+benchmarks/inferencex/results
 profiling_results*
+results/
+
+# Build artifacts
+dist/
 
 # Direnv
 .envrc

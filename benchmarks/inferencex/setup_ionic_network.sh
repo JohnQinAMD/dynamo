@@ -1,0 +1,1 @@
+../../scripts/setup_ionic_network.sh

@@ -1,0 +1,1 @@
+../../scripts/preflight_check.sh

@@ -1,0 +1,4 @@
+[submodule "InferenceX"]
+	path = InferenceX
+	url = git@github.com:JohnQinAMD/InferenceX.git
+	branch = amd-dynamo-sglang-benchmarks

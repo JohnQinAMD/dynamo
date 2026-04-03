@@ -221,6 +221,91 @@ class RocmDramStaging:
             err = self._hip.hipDeviceSynchronize()
             self._check_hip(err, "hipDeviceSynchronize")
 
+    # -- host registration for async DMA --------------------------------------
+
+    def hip_host_register(self, host_addr: int, size: int) -> bool:
+        """Register mmap+mlock'd memory with HIP for true async DMA.
+
+        Without this, hipMemcpyAsync from pageable host memory falls back
+        to synchronous internal staging.  With registration, the DMA engine
+        can read directly from the pinned pages.
+        """
+        try:
+            err = self._hip.hipHostRegister(
+                ctypes.c_void_p(host_addr),
+                ctypes.c_size_t(size),
+                ctypes.c_int(0),  # hipHostRegisterDefault
+            )
+            if err != 0:
+                logger.warning(
+                    "hipHostRegister failed (err=%d) for %d MB — "
+                    "async DMA will use internal staging",
+                    err, size >> 20,
+                )
+                return False
+            logger.info(
+                "hipHostRegister: %d MB at %s", size >> 20, hex(host_addr)
+            )
+            return True
+        except Exception as exc:
+            logger.debug("hipHostRegister unavailable: %s", exc)
+            return False
+
+    def hip_host_unregister(self, host_addr: int):
+        """Unregister previously registered host memory."""
+        try:
+            self._hip.hipHostUnregister(ctypes.c_void_p(host_addr))
+        except Exception:
+            pass
+
+    # -- NUMA affinity ---------------------------------------------------------
+
+    @staticmethod
+    def numa_bind_buffer(host_addr: int, size: int, rdma_device: str = None):
+        """Bind buffer pages to the NUMA node closest to *rdma_device*.
+
+        Uses ``mbind(MPOL_BIND | MPOL_MF_MOVE)`` so existing pages migrate.
+        Falls back silently when the syscall or sysfs lookup fails.
+        If *rdma_device* is ``None``, auto-detects the first ionic device.
+        """
+        try:
+            if rdma_device is None:
+                for i in range(8):
+                    if os.path.exists(f"/sys/class/infiniband/ionic_{i}"):
+                        rdma_device = f"ionic_{i}"
+                        break
+
+            numa_node = 0
+            if rdma_device:
+                sysfs = f"/sys/class/infiniband/{rdma_device}/device/numa_node"
+                if os.path.exists(sysfs):
+                    with open(sysfs) as fh:
+                        n = int(fh.read().strip())
+                        if n >= 0:
+                            numa_node = n
+
+            libc = RocmDramStaging._get_libc()
+            MPOL_BIND = 2
+            MPOL_MF_MOVE = 2
+            nodemask = (ctypes.c_ulong * 1)(1 << numa_node)
+            rc = libc.mbind(
+                ctypes.c_void_p(host_addr),
+                ctypes.c_size_t(size),
+                ctypes.c_int(MPOL_BIND),
+                ctypes.cast(nodemask, ctypes.POINTER(ctypes.c_ulong)),
+                ctypes.c_ulong(64),
+                ctypes.c_uint(MPOL_MF_MOVE),
+            )
+            if rc == 0:
+                logger.info(
+                    "NUMA bind: %d MB → node %d (%s)",
+                    size >> 20, numa_node, rdma_device or "default",
+                )
+            else:
+                logger.warning("mbind returned %d for %d MB", rc, size >> 20)
+        except Exception as exc:
+            logger.debug("NUMA bind skipped: %s", exc)
+
     # -- address translation ---------------------------------------------------
 
     def translate_base(self, gpu_ptr: int) -> int:
